@@ -1,6 +1,6 @@
 spring:
   application:
-    name: api-gateway
+    name: activity-service
 
   output:
     ansi:
@@ -26,12 +26,9 @@ spring:
       INDENT_OUTPUT: true
 
 server:
-  port: 8080
+  port: 8081
 
-# JWT custom config (you will use this in JwtUtil)
-jwt:
-  secret: ma5ae3ae15600100f08d386259c14228b58cf9778e336adb61ce47835e473dad115a1138bd1ee005868199fdafec44293
-  expiration: 86400000   # 1 day in ms
+
 
 # Logging (very useful during dev)
 logging:
@@ -62,8 +59,3 @@ eureka:
     metadata-map:
       zone: ap-south-1
       version: v1
-# Future Gateway routing config (placeholder for later upgrade)
-#app:
-#  services:
-#    activity-service: http://localhost:8082
-#    gamification-service: http://localhost:8083

@@ -1,5 +1,6 @@
 package com.tracker.gateway.dto;
 
+import com.tracker.gateway.user.Role;
 import lombok.*;
 
 @AllArgsConstructor
@@ -14,4 +15,5 @@ public class RegisterRequest {
     private String lastName;
     private String email;
     private String password;
+    private Role role;
 }

@@ -1,9 +1,6 @@
 package com.tracker.gateway.user;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 import lombok.*;
 
 @AllArgsConstructor
@@ -14,7 +11,7 @@ import lombok.*;
 @Entity
 @ToString
 @EqualsAndHashCode
-@Table(name = "user_entity")
+@Table(name = "user_entity", uniqueConstraints = @UniqueConstraint(columnNames = {"email"}))
 public class User {
 
     @Id
@@ -23,6 +20,10 @@ public class User {
 
     private String firstName;
     private String lastName;
+
     private String email;
     private String password;
+
+    @Enumerated(EnumType.STRING)
+    private Role role;
 }
