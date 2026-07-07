@@ -105,12 +105,11 @@ public class LevelTrackerService {
     }
 
     private LevelTrackerDto mapToDto(LevelTracker entity) {
-        // totalXp intentionally not carried over here — matches pre-existing mapping behavior
         return new LevelTrackerDto(
                 entity.getUserId(),
                 entity.getActivityId(),
                 entity.getLevel(),
-                0.0,
+                entity.getTotalXp(),
                 entity.getCurrentLevelXp()
         );
     }

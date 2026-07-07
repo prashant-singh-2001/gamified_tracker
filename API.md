@@ -14,9 +14,9 @@ All API Gateway endpoints require a JWT **except** `/auth/**`. Obtain a token vi
 Authorization: Bearer <token>
 ```
 
-Tokens are signed HS256 JWTs. The signing secret comes from `jwt.secret` (see `.env` / `JWT_SECRET`). Token expiry is **hardcoded to 24 hours** in `JwtUtil.generateToken()` — the `jwt.expiration` / `JWT_EXPIRATION` config value is not currently read by the token-generation code, only kept as unused config.
+Tokens are signed HS256 JWTs and carry the user's `role` as a claim. The signing secret and expiry both come from config (`jwt.secret` / `jwt.expiration`, see `.env` / `JWT_SECRET` / `JWT_EXPIRATION`).
 
-⚠️ **Known issue:** `JwtFilter` currently authenticates every valid token with an **empty authorities list** (`List.of()`). Endpoints annotated `@PreAuthorize("hasRole('ADMIN')")` (e.g. `POST /api/activity`) will reject every request, including from users registered with `role: ADMIN`, until this is fixed.
+Method security is enabled, and `JwtFilter` grants an authority derived from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`), so `@PreAuthorize("hasRole('ADMIN')")` (e.g. `POST /api/activity`) is properly enforced: an `ADMIN` token succeeds, any other role gets `403`.
 
 ---
 
@@ -34,9 +34,9 @@ Creates a user and returns a JWT. Public (no token required).
 | `lastName` | String | |
 | `email` | String | must be unique |
 | `password` | String | hashed with BCrypt before storage |
-| `role` | String enum: `USER`, `ADMIN` | accepted but the user is always saved with role `USER` regardless of what's sent — see Known Issues |
+| `role` | String enum: `USER`, `ADMIN` | optional; defaults to `USER` if omitted. Note: this means any caller can self-register as `ADMIN` — acceptable for this demo app, not production-safe |
 
-**Response:** `200 OK`, body is a raw JWT string (not JSON-wrapped).
+**Response:** `200 OK`, body is a raw JWT string (not JSON-wrapped), with the saved role embedded as a claim.
 
 ---
 
@@ -49,7 +49,7 @@ Authenticates and returns a JWT. Public (no token required).
 | `email` | String |
 | `password` | String |
 
-**Response:** `200 OK`, raw JWT string. `500` (raw `RuntimeException`, not a `ProblemDetail`) if the user doesn't exist or the password doesn't match.
+**Response:** `200 OK`, raw JWT string. `401` `ProblemDetail` (`"Invalid email or password"`) if the user doesn't exist or the password doesn't match — the same message either way, so the error doesn't reveal which one failed.
 
 ---
 
@@ -76,12 +76,10 @@ Fetch one activity by name. Requires auth (any role).
 - `200 OK` — same shape as above (single object)
 - `404` `ProblemDetail` — not found
 
-⚠️ **Currently broken.** The upstream Activity Service route has a routing bug (`@GetMapping("/  {name}")` — stray whitespace) that makes it 404 for every name, including ones that exist. See Known Issues.
-
 ---
 
 #### `POST /api/activity`
-Create an activity. **Requires `ADMIN` role** (currently unreachable by anyone — see Known Issues above).
+Create an activity. **Requires `ADMIN` role** — a non-admin token gets `403`.
 
 **Request body:**
 | Field | Type | Notes |
@@ -157,10 +155,8 @@ Base path `/activity` and `/activitylog`. No auth layer of its own — auth is o
 #### `GET /activity/`
 List all activities. Same response shape as the Gateway's `GET /api/activity`.
 
-#### `GET /activity/{name}` ⚠️ currently broken
-Fetch one activity by name.
-- Intended: `200 OK` with the activity, or `404` `ProblemDetail` (`"Activity not found: {name}"`) if missing.
-- **Actual current behavior:** the route is declared as `@GetMapping("/  {name}")` (stray double space), so it matches nothing — every request 404s with Spring's generic error body, regardless of whether the name exists.
+#### `GET /activity/{name}`
+Fetch one activity by name. `200 OK` with the activity, or `404` `ProblemDetail` (`"Activity not found: {name}"`) if missing.
 
 #### `POST /activity/`
 Create an activity. Same request/response shape as the Gateway's `POST /api/activity` (no role check at this layer — that's Gateway-only).
@@ -191,7 +187,7 @@ List every `LevelTracker` row (all users, all activities).
 | `userId` | Long | |
 | `activityId` | Long | |
 | `level` | Integer | |
-| `totalXp` | double | ⚠️ **always returns `0.0`** — a pre-existing mapping gap that never carries the real accumulated total through to the DTO (the underlying entity does track it correctly internally) |
+| `totalXp` | double | total accumulated XP for this user+activity |
 | `currentLevelXp` | double | XP accumulated within the current level |
 
 #### `GET /level/{id}`
@@ -205,7 +201,7 @@ Create-or-update a user's XP for an activity, recalculating level. This is what 
 |---|---|---|
 | `userId` | Long | |
 | `activityId` | Long | |
-| `xp` | double | XP to add. **Must be ≥ 0** — negative values are rejected with `400 Bad Request` before reaching the database |
+| `xp` | double | XP to add. **Must be ≥ 0** — negative values are rejected with a `400` `ProblemDetail` (`"Invalid request body"`) before reaching the database |
 
 **Response:** `200 OK`, the resulting `LevelTrackerDto` (shape above). Level-up logic: crosses the highest `ActivityLevelThreshold` whose `xpRequired` is ≤ the new total XP for that activity; `currentLevelXp` becomes `totalXp − threshold.xpRequired`.
 
@@ -236,7 +232,7 @@ Look up a single threshold by composite key (despite the `POST`, this is a read 
 
 **Request body:** `{ "activityId": Long, "level": Integer }` (`xpRequired` is ignored).
 
-**Response:** `200 OK` with the matching threshold, or `500` (raw `NoSuchElementException`, not a `ProblemDetail` — inconsistent with the rest of this service) if no match.
+**Response:** `200 OK` with the matching threshold, or `404` `ProblemDetail` (`"ActivityLevelThreshold not found"`) if no match.
 
 #### `POST /threshold`
 Create (or overwrite) a threshold.
@@ -261,21 +257,19 @@ Most `404` responses across all three services use Spring's RFC 7807 `ProblemDet
 }
 ```
 
-Exceptions to this (return a generic Spring Boot error body or a raw `500` instead):
-- `POST /auth/login` failures (user not found / bad password) — raw `500`.
-- `POST /threshold/activity` with no match — raw `500`.
-- `GET /activity/{name}` and any other route that fails to match at all (e.g. the currently-broken activity lookup) — Spring's default 404 whitelabel body, not `ProblemDetail`.
-- Validation failures on `POST /level` (negative `xp`) — generic `400` Bad Request body, not `ProblemDetail`.
+`401` (`POST /auth/login` failures) and `400` (validation failures on `POST /level`) also use `ProblemDetail`. Any route that fails to match at all (e.g. a typo'd path) still falls back to Spring's default whitelabel error body, since that never reaches application code.
 
 ---
 
 ## Known Issues Summary
 
-| Issue | Impact |
-|---|---|
-| `ActivityController.getActivity` route has a stray-whitespace path (`"/  {name}"`) | `GET /activity/{name}` (and the Gateway route that proxies it) 404s unconditionally |
-| `JwtFilter` grants no authorities to any authenticated user | `@PreAuthorize("hasRole('ADMIN')")` on `POST /api/activity` rejects everyone, including real admins |
-| `AuthService.register` ignores the `role` field, always saves `USER` | Even if the authority bug above were fixed, there's currently no way to register an `ADMIN` via the API |
-| `JwtUtil` hardcodes a 24h expiry, ignoring the `jwt.expiration` config | `JWT_EXPIRATION` env var has no effect |
-| `LevelTrackerService.mapToDto` never sets `totalXp` on the response DTO | Every Level Tracker response shows `totalXp: 0.0` regardless of actual accumulated XP |
-| Several error paths return raw `500`s / default error bodies instead of `ProblemDetail` | Inconsistent error shape for API consumers (see Error Response Format above) |
+All previously-tracked issues in this section have been resolved and verified end-to-end:
+
+- ~~`ActivityController` route bug (stray whitespace) breaking `GET /activity/{name}`~~ — fixed.
+- ~~`@PreAuthorize("hasRole('ADMIN')")` inert due to missing `@EnableMethodSecurity` + `JwtFilter` granting no authorities~~ — fixed; non-admin tokens now get a real `403`.
+- ~~`AuthService.register` ignoring the requested `role`~~ — fixed; note the resulting tradeoff documented above (self-service `ADMIN` registration).
+- ~~`JwtUtil` ignoring the `jwt.expiration` config~~ — fixed; confirmed the token's `exp` claim moves when the config value changes.
+- ~~`LevelTrackerService.mapToDto` always returning `totalXp: 0.0`~~ — fixed.
+- ~~Inconsistent error shapes (raw `500`s / generic bodies instead of `ProblemDetail`)~~ — fixed for login failures and negative-`xp` validation.
+
+Remaining non-issues, documented for awareness rather than as defects: `createdAt` is always server-set (client-supplied values on create endpoints are accepted but ignored), and any caller can self-register as `ADMIN` (acceptable for a demo app).

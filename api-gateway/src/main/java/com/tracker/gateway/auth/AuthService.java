@@ -2,6 +2,7 @@ package com.tracker.gateway.auth;
 
 import com.tracker.gateway.dto.LoginRequest;
 import com.tracker.gateway.dto.RegisterRequest;
+import com.tracker.gateway.exception.InvalidCredentialsException;
 import com.tracker.gateway.user.Role;
 import com.tracker.gateway.user.User;
 import com.tracker.gateway.user.UserRepository;
@@ -33,22 +34,22 @@ public class AuthService {
         // Encrypt password before saving
         user.setPassword(passwordEncoder.encode(request.password()));
 
-        user.setRole(Role.USER);
+        user.setRole(request.role() != null ? request.role() : Role.USER);
         userRepository.save(user);
 
-        return jwtUtil.generateToken(request.email());
+        return jwtUtil.generateToken(user.getEmail(), user.getRole());
     }
 
     public String login(LoginRequest req) {
 
         var user = userRepository.findByEmail(req.email())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(InvalidCredentialsException::new);
 
         // Compare encrypted password
         if (!passwordEncoder.matches(req.password(), user.getPassword())) {
-            throw new RuntimeException("Invalid credentials");
+            throw new InvalidCredentialsException();
         }
 
-        return jwtUtil.generateToken(req.email());
+        return jwtUtil.generateToken(user.getEmail(), user.getRole());
     }
 }

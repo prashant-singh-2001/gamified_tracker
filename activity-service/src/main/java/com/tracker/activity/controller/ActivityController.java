@@ -16,7 +16,7 @@ public class ActivityController {
     @Autowired
     ActivityService activityService;
 
-    @GetMapping("/  {name}")
+    @GetMapping("/{name}")
     public ResponseEntity<ActivityResponseRecord> getActivity(@PathVariable String name) {
         return activityService.getActivity(name);
     }

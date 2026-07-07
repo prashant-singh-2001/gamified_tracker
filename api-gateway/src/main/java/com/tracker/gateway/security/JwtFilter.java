@@ -1,11 +1,13 @@
 package com.tracker.gateway.security;
 
 import com.tracker.gateway.auth.JwtUtil;
+import com.tracker.gateway.user.Role;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -46,10 +48,15 @@ public class JwtFilter extends OncePerRequestFilter {
         String token = header.substring(7);
 
         try {
-            String email = jwtUtil.validateToken(token);
+            var claims = jwtUtil.validateToken(token);
+            String email = claims.getSubject();
+            String roleClaim = claims.get("role", String.class);
+            Role role = roleClaim != null ? Role.valueOf(roleClaim) : Role.USER;
+
+            var authorities = List.of(new SimpleGrantedAuthority(role.authority()));
 
             UsernamePasswordAuthenticationToken auth =
-                    new UsernamePasswordAuthenticationToken(email, null, List.of());
+                    new UsernamePasswordAuthenticationToken(email, null, authorities);
 
             SecurityContextHolder.getContext().setAuthentication(auth);
 
