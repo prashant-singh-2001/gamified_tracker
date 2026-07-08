@@ -74,7 +74,6 @@ See **[API.md](API.md)** for the full endpoint reference.
 ## Documentation
 
 - **[API.md](API.md)** — all REST endpoints and their request/response shapes
-- **[CLAUDE.md](CLAUDE.md)** — architecture deep-dive and development guide
 - **[TODO-FIX.md](TODO-FIX.md)** — backlog of improvements and known gaps
 
 ## Contributing
