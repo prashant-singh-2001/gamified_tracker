@@ -1,13 +1,25 @@
-# Build stage
-FROM maven:3.9.6-eclipse-temurin-17 AS builder
+# build stage
+FROM maven:3.9-eclipse-temurin-17-alpine AS  builder
 WORKDIR /app
-COPY . .
+COPY pom.xml .
+RUN mvn dependency:go-offline
+COPY src ./src
 RUN mvn clean package -DskipTests
 
-# Run stage
-FROM eclipse-temurin:17-jdk-alpine
+RUN java -Djarmode=layertools -jar target/*.jar extract
+
+# run stage
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
-COPY --from=builder /app/target/*.jar app.jar
+RUN addgroup -S MyGroup && adduser -S MyUser -G MyGroup
+COPY --from=builder /app/dependencies/ ./
+COPY --from=builder /app/spring-boot-loader/ ./
+COPY --from=builder /app/snapshot-dependencies/ ./
+COPY --from=builder /app/application/ ./
+RUN chown -R MyUser:MyGroup /app
 
 EXPOSE 8761
-ENTRYPOINT ["java", "-jar", "app.jar"]
+
+USER MyUser
+
+ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]
