@@ -12,14 +12,17 @@ import lombok.*;
 @EqualsAndHashCode
 @Builder
 @Entity
-@Table(name = "LevelTracker")
+@Table(name = "LevelTracker",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_level_tracker_user_activity",
+                columnNames = {"user_id", "activity_id"}))
 public class LevelTracker {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    Long id;
-    Long userId;
-    Long activityId;
-    Integer level;
-    double totalXp;
-    double currentLevelXp;
+    private Long id;
+    private Long userId;
+    private Long activityId;
+    private Integer level;
+    private double totalXp;
+    private double currentLevelXp;
 }

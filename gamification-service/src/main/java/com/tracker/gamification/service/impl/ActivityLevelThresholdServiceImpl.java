@@ -5,7 +5,6 @@ import com.tracker.gamification.dto.ActivityLevelThresholdDto;
 import com.tracker.gamification.dao.ActivityLevelThresholdId;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.service.ActivityLevelThresholdService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;

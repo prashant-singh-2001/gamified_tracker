@@ -3,9 +3,11 @@ package com.tracker.gamification.service;
 import com.tracker.gamification.dao.ActivityLevelThreshold;
 import com.tracker.gamification.dao.ActivityLevelThresholdId;
 import com.tracker.gamification.dao.LevelTracker;
+import com.tracker.gamification.dao.LevelTrackerArchive;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
+import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.service.impl.LevelTrackerServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -32,6 +34,9 @@ public class LevelTrackerServiceImplTest {
 
     @Mock
     private ActivityLevelThresholdRepository activityLevelThresholdRepository;
+
+    @Mock
+    private LevelTrackerArchiveRepository levelTrackerArchiveRepository;
 
     @InjectMocks
     private LevelTrackerServiceImpl levelTrackerService;
@@ -230,6 +235,15 @@ public class LevelTrackerServiceImplTest {
         // Arrange
         LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 100.0);
 
+        // insertIfAbsent atomically creates the zero-state row when none existed
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L)
+                .userId(1L)
+                .activityId(1L)
+                .totalXp(0.0)
+                .currentLevelXp(0.0)
+                .build();
+
         LevelTracker savedTracker = LevelTracker.builder()
                 .id(1L)
                 .userId(1L)
@@ -239,8 +253,9 @@ public class LevelTrackerServiceImplTest {
                 .currentLevelXp(100.0)
                 .build();
 
-        when(levelTrackerRepository.findByUserIdAndActivityId(1L, 1L))
-                .thenReturn(Optional.empty());
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
 
         when(activityLevelThresholdRepository.findReachedLevels(
                 eq(1L),
@@ -260,12 +275,15 @@ public class LevelTrackerServiceImplTest {
         assertEquals(1L, result.activityId());
         assertEquals(1, result.level());
         assertEquals(100.0, result.totalXp());
-        verify(levelTrackerRepository).findByUserIdAndActivityId(1L, 1L);
+        verify(levelTrackerRepository).insertIfAbsent(1L, 1L);
+        verify(levelTrackerRepository).findByUserIdAndActivityIdForUpdate(1L, 1L);
         verify(levelTrackerRepository).save(any(LevelTracker.class));
+        // brand-new row: nothing to archive
+        verify(levelTrackerArchiveRepository, never()).save(any(LevelTrackerArchive.class));
     }
 
     @Test
-    @DisplayName("save updates existing tracker and accumulates XP")
+    @DisplayName("save updates existing tracker, archives previous state, and accumulates XP")
     void testSaveExistingTracker() {
         // Arrange
         LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 50.0);
@@ -288,7 +306,8 @@ public class LevelTrackerServiceImplTest {
                 .currentLevelXp(150.0)
                 .build();
 
-        when(levelTrackerRepository.findByUserIdAndActivityId(1L, 1L))
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(0);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
                 .thenReturn(Optional.of(existingTracker));
 
         when(activityLevelThresholdRepository.findReachedLevels(
@@ -307,8 +326,16 @@ public class LevelTrackerServiceImplTest {
         assertNotNull(result);
         assertEquals(1L, result.userId());
         assertEquals(150.0, result.totalXp());
-        verify(levelTrackerRepository).findByUserIdAndActivityId(1L, 1L);
+        verify(levelTrackerRepository).insertIfAbsent(1L, 1L);
+        verify(levelTrackerRepository).findByUserIdAndActivityIdForUpdate(1L, 1L);
         verify(levelTrackerRepository).save(any(LevelTracker.class));
+        // pre-existing row: the PREVIOUS state (100.0 XP, before this update) must be archived
+        verify(levelTrackerArchiveRepository).save(argThat(archive ->
+                archive.getUserId().equals(1L)
+                        && archive.getActivityId().equals(1L)
+                        && archive.getTotalXp() == 100.0
+                        && archive.getCurrentLevelXp() == 100.0
+        ));
     }
 
     @Test
@@ -327,6 +354,14 @@ public class LevelTrackerServiceImplTest {
                 .xpRequired(200.0)
                 .build();
 
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L)
+                .userId(1L)
+                .activityId(1L)
+                .totalXp(0.0)
+                .currentLevelXp(0.0)
+                .build();
+
         LevelTracker leveledUpTracker = LevelTracker.builder()
                 .id(1L)
                 .userId(1L)
@@ -336,8 +371,9 @@ public class LevelTrackerServiceImplTest {
                 .currentLevelXp(100.0)
                 .build();
 
-        when(levelTrackerRepository.findByUserIdAndActivityId(1L, 1L))
-                .thenReturn(Optional.empty());
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
 
         when(activityLevelThresholdRepository.findReachedLevels(
                 eq(1L),
@@ -356,7 +392,8 @@ public class LevelTrackerServiceImplTest {
         assertEquals(2, result.level());
         assertEquals(100.0, result.currentLevelXp());
         assertEquals(300.0, result.totalXp());
-        verify(levelTrackerRepository).findByUserIdAndActivityId(1L, 1L);
+        verify(levelTrackerRepository).insertIfAbsent(1L, 1L);
+        verify(levelTrackerRepository).findByUserIdAndActivityIdForUpdate(1L, 1L);
         verify(activityLevelThresholdRepository).findReachedLevels(
                 eq(1L),
                 eq(300.0),
@@ -371,6 +408,14 @@ public class LevelTrackerServiceImplTest {
         // Arrange
         LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 0.0);
 
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L)
+                .userId(1L)
+                .activityId(1L)
+                .totalXp(0.0)
+                .currentLevelXp(0.0)
+                .build();
+
         LevelTracker savedTracker = LevelTracker.builder()
                 .id(1L)
                 .userId(1L)
@@ -380,8 +425,9 @@ public class LevelTrackerServiceImplTest {
                 .currentLevelXp(0.0)
                 .build();
 
-        when(levelTrackerRepository.findByUserIdAndActivityId(1L, 1L))
-                .thenReturn(Optional.empty());
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
 
         when(activityLevelThresholdRepository.findReachedLevels(
                 eq(1L),
