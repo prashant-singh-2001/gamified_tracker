@@ -55,7 +55,10 @@ public class ActivityLogControllerTest {
                 30L,
                 50.0,
                 "Good run",
-                now
+                now,
+                false,
+                1.0,
+                false
         );
 
         //Act
@@ -100,7 +103,10 @@ public class ActivityLogControllerTest {
                 30L,
                 50.0,
                 "Morning run",
-                now
+                now,
+                false,
+                1.0,
+                false
         );
 
         //Act
@@ -158,7 +164,10 @@ public class ActivityLogControllerTest {
                 30L,
                 50.0,
                 "Morning run",
-                now
+                now,
+                false,
+                1.0,
+                false
         );
         ActivityLogResponse log2 = new ActivityLogResponse(
                 2L,
@@ -169,7 +178,10 @@ public class ActivityLogControllerTest {
                 60L,
                 80.0,
                 "Swimming session",
-                now.plusHours(1)
+                now.plusHours(1),
+                false,
+                1.0,
+                false
         );
         ActivityLogResponse log3 = new ActivityLogResponse(
                 3L,
@@ -180,7 +192,10 @@ public class ActivityLogControllerTest {
                 60L,
                 70.0,
                 "Evening cycle",
-                now.plusHours(3)
+                now.plusHours(3),
+                false,
+                1.0,
+                false
         );
 
         //Act

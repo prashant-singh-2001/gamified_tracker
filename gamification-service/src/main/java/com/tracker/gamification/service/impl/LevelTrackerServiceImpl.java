@@ -26,8 +26,8 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final LevelTrackerArchiveRepository levelTrackerArchiveRepository;
 
     public LevelTrackerServiceImpl(LevelTrackerRepository levelTrackerRepository,
-                                    ActivityLevelThresholdRepository activityLevelThresholdRepository,
-                                    LevelTrackerArchiveRepository levelTrackerArchiveRepository) {
+                                   ActivityLevelThresholdRepository activityLevelThresholdRepository,
+                                   LevelTrackerArchiveRepository levelTrackerArchiveRepository) {
         this.levelTrackerRepository = levelTrackerRepository;
         this.activityLevelThresholdRepository = activityLevelThresholdRepository;
         this.levelTrackerArchiveRepository = levelTrackerArchiveRepository;
@@ -82,9 +82,10 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         }
 
         tracker.setTotalXp(tracker.getTotalXp() + dto.xp());
-        applyLevel(tracker);
+        boolean leveledUp = applyLevel(tracker);
 
-        return mapToDto(levelTrackerRepository.save(tracker));
+        var saved = levelTrackerRepository.save(tracker);
+        return mapToDto(saved, leveledUp);
     }
 
     private void archivePreviousState(LevelTracker tracker) {
@@ -100,7 +101,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         );
     }
 
-    private void applyLevel(LevelTracker levelTracker) {
+    private boolean applyLevel(LevelTracker levelTracker) {
         var reachedLevels =
                 activityLevelThresholdRepository
                         .findReachedLevels(
@@ -112,26 +113,36 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         LevelOutcome outcome = reachedLevels.isEmpty()
                 ? new LevelOutcome.InProgress(1, levelTracker.getTotalXp())
                 : new LevelOutcome.LeveledUp(
-                        reachedLevels.get(0).getId().getLevel(),
-                        levelTracker.getTotalXp() - reachedLevels.get(0).getXpRequired()
-                );
+                reachedLevels.get(0).getId().getLevel(),
+                levelTracker.getTotalXp() - reachedLevels.get(0).getXpRequired()
+        );
 
+        boolean leveledUp = false;
         if (outcome instanceof LevelOutcome.LeveledUp up) {
             levelTracker.setLevel(up.level());
             levelTracker.setCurrentLevelXp(up.currentLevelXp());
+            leveledUp = true;
         } else if (outcome instanceof LevelOutcome.InProgress ip) {
             levelTracker.setLevel(ip.level());
             levelTracker.setCurrentLevelXp(ip.currentLevelXp());
+            leveledUp = false;
         }
+
+        return leveledUp;
     }
 
-    private LevelTrackerDto mapToDto(LevelTracker entity) {
+    private LevelTrackerDto mapToDto(LevelTracker entity, boolean leveledUp) {
         return new LevelTrackerDto(
                 entity.getUserId(),
                 entity.getActivityId(),
                 entity.getLevel(),
                 entity.getTotalXp(),
-                entity.getCurrentLevelXp()
+                entity.getCurrentLevelXp(),
+                leveledUp
         );
+    }
+
+    private LevelTrackerDto mapToDto(LevelTracker entity) {
+        return mapToDto(entity, false);
     }
 }

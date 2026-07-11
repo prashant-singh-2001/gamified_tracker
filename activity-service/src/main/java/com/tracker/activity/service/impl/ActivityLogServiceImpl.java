@@ -35,7 +35,8 @@ public class ActivityLogServiceImpl implements ActivityLogService {
         var activityLog = activityLogRepository.findById(id)
                 .orElseThrow(() -> new ActivityNotFoundException("Activity log not found: " + id));
 
-        return ResponseEntity.ok(mapToActivityLogResponse(activityLog));
+        // historical logs don't have bonus/leveled flags stored yet — return defaults
+        return ResponseEntity.ok(mapToActivityLogResponse(activityLog, false, 1.0, false));
     }
 
     @Override
@@ -48,17 +49,20 @@ public class ActivityLogServiceImpl implements ActivityLogService {
         double bonus = random.nextDouble() < 0.2 ? random.nextDouble(1.1, 1.5) : 1.0; // 20% chance of a bonus roll
         activityLog.setXpEarned(activityLog.getDurationMinutes() * multiplier * bonus);
 
-        gamificationClient.createLevelTracker(new LevelTrackerRequestDTO(activityLog.getUserId(), activityLog.getActivity().getId(), activityLog.getXpEarned()));
+        var levelTrackerDto = gamificationClient.createLevelTracker(new LevelTrackerRequestDTO(activityLog.getUserId(), activityLog.getActivity().getId(), activityLog.getXpEarned()));
 
         activityLogRepository.save(activityLog);
 
-        return ResponseEntity.ok(mapToActivityLogResponse(activityLog));
+        boolean bonusApplied = bonus != 1.0;
+        boolean leveledUp = levelTrackerDto != null && levelTrackerDto.leveledUp();
+
+        return ResponseEntity.ok(mapToActivityLogResponse(activityLog, bonusApplied, bonus, leveledUp));
     }
 
     public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(Long id) {
         var activityLogList = activityLogRepository.findByUserId(id);
 
-        var activityLogResponses = activityLogList.stream().map(this::mapToActivityLogResponse).toList();
+        var activityLogResponses = activityLogList.stream().map(a -> mapToActivityLogResponse(a, false, 1.0, false)).toList();
 
         return ResponseEntity.ok(activityLogResponses);
     }
@@ -75,7 +79,7 @@ public class ActivityLogServiceImpl implements ActivityLogService {
                 .build();
     }
 
-    private ActivityLogResponse mapToActivityLogResponse(ActivityLog activityLog) {
+    private ActivityLogResponse mapToActivityLogResponse(ActivityLog activityLog, boolean bonusApplied, double bonusMultiplier, boolean leveledUp) {
         return new ActivityLogResponse(
                 activityLog.getId(),
                 activityLog.getUserId(),
@@ -85,7 +89,10 @@ public class ActivityLogServiceImpl implements ActivityLogService {
                 activityLog.getDurationMinutes(),
                 activityLog.getXpEarned(),
                 activityLog.getNotes(),
-                activityLog.getCreatedAt()
+                activityLog.getCreatedAt(),
+                bonusApplied,
+                bonusMultiplier,
+                leveledUp
         );
     }
 }
