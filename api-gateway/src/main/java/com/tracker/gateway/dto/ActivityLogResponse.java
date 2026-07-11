@@ -13,6 +13,9 @@ public record ActivityLogResponse(
         Long durationMinutes,
         double xpEarned,
         String notes,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        boolean bonusApplied,
+        double bonusMultiplier,
+        boolean leveledUp
 ) {
 }

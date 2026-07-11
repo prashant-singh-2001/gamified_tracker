@@ -53,7 +53,10 @@ public class ActivityLogGatewayControllerTest {
                 60L,
                 100.0,
                 "notes",
-                LocalDateTime.now()
+                LocalDateTime.now(),
+                false,
+                1.0,
+                false
         );
 
         when(activityClient.getActivityLog(1L)).thenReturn(ResponseEntity.ok(response));
@@ -75,7 +78,10 @@ public class ActivityLogGatewayControllerTest {
                 60L,
                 100.0,
                 "notes",
-                LocalDateTime.now()
+                LocalDateTime.now(),
+                false,
+                1.0,
+                false
         );
 
         when(activityClient.addActivityLog(any())).thenReturn(ResponseEntity.ok(response));
@@ -102,7 +108,10 @@ public class ActivityLogGatewayControllerTest {
                 60L,
                 100.0,
                 "notes",
-                LocalDateTime.now()
+                LocalDateTime.now(),
+                false,
+                1.0,
+                false
         );
 
         when(activityClient.getAllActivityForUser(100L)).thenReturn(ResponseEntity.ok(List.of(response)));

@@ -5,6 +5,7 @@ public record LevelTrackerDto(
         Long activityId,
         Integer level,
         double totalXp,
-        double currentLevelXp
+        double currentLevelXp,
+        boolean leveledUp
 ) {
 }
