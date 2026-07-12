@@ -10,17 +10,15 @@ Analysis of enhancements, engineering improvements, and business-logic gaps, gro
 
 Real correctness / trust gaps in how the app behaves.
 
-- [ ] 🔴 **Derive `userId` from the token; enforce ownership (IDOR).**
-  The JWT identifies the caller by *email*, but the domain keys on an unrelated client-supplied `Long userId` (`AddActivityLogRequest`, `GET /api/activitylog/user/{id}`, `GET /level/user/{userId}`). Any authenticated user can log activities as, and read the XP/levels of, **any** other user. Resolve the authenticated principal → user id server-side (in the gateway) and enforce ownership on reads. Also add a real mapping between the gateway `User.id` and the `Long userId` used downstream.
-  - Files: `api-gateway/.../controller/ActivityLogGatewayController.java`, `.../ActivityGatewayController.java`, `activity-service/.../dto/AddActivityLogRequest.java`, `activity-service/.../service/ActivityLogService.java`
+- [x] ~~🔴 **Derive `userId` from the token; enforce ownership (IDOR).**~~ ✅ **Fixed.**
+  The JWT now carries the numeric `userId` claim (set at register/login). `api-gateway`'s `JwtFilter` injects it as a trusted `userId` request header, overwriting/stripping any client-supplied value, before the request is routed downstream; `activity-service` forwards the same header on its internal Feign call. `POST /api/activitylog` and `POST /api/level` derive the acting user from that header — their request DTOs no longer accept `userId` in the body at all. **Ownership was deliberately *not* enforced on reads** — `GET .../{id}` and `GET .../user/{id}` remain open across users by design (a social/leaderboard feature), a scope decision made explicitly during the fix, not an oversight. See [API.md § Authentication](API.md#authentication).
 
 - [ ] 🔴 **Save the activity log *before* the cross-service gamification call.**
   In `ActivityLogService.addActivityLogResponseResponseEntity()` the Feign call `gamificationClient.createLevelTracker(...)` runs *before* `activityLogRepository.save(...)`. If gamification is down/rejects, the log is never persisted and the user gets an error. Persist locally first; treat the XP update as a secondary, resilient step (ideally async — see Enhancements).
   - File: `activity-service/src/main/java/com/tracker/activity/service/ActivityLogService.java` (~lines 39–41)
 
-- [ ] 🔴 **Fix the lost-update race on XP accumulation.**
-  `LevelTrackerService.save()` does read-modify-write (`existing.setTotalXp(existing.getTotalXp() + dto.xp())`) with no locking. Concurrent logs for the same user+activity silently drop an increment. `LevelTracker` has **no `@Version`** and **no unique constraint on `(userId, activityId)`**, so concurrent first-time writes can also create duplicate rows. Fix with optimistic locking (`@Version`) + a DB unique constraint, or an atomic `UPDATE ... SET total_xp = total_xp + ?`.
-  - Files: `gamification-service/.../service/LevelTrackerService.java` (~lines 61–76), `gamification-service/.../dao/LevelTracker.java`
+- [x] ~~🔴 **Fix the lost-update race on XP accumulation.**~~ ✅ **Fixed** (issue #5, [PR #29](https://github.com/prashant-singh-2001/gamified_tracker/pull/29)).
+  `LevelTrackerServiceImpl.save()` now does an atomic `insertIfAbsent` (native `INSERT ... ON CONFLICT DO NOTHING`) followed by `SELECT ... FOR UPDATE` pessimistic row locking for the rest of the transaction, plus a DB unique constraint on `(user_id, activity_id)`. Verified with a live 20-request concurrent burst — exact `totalXp`, a single row, coherent archive sequence. See [gamification-service README](gamification-service/README.md#key-internal-flow--leveltrackerserviceimplsave).
 
 - [ ] 🟡 **Reject backwards time ranges (currently a 500).**
   `endTime < startTime` → negative `durationMinutes` → negative `xpEarned` → the `LevelTrackerRequestDTO` compact constructor (`xp < 0`) throws inside activity-service → unhandled 500. Validate `endTime > startTime` up front and return a clean 400.
@@ -42,9 +40,8 @@ Real correctness / trust gaps in how the app behaves.
   `xpEarned` uses stored `Activity.xpMultiplier`; `Category.baseXpMultiplier()` is defined but **never called**. Pick a source of truth (per-activity override with category default is a clean model).
   - Files: `activity-service/.../dao/Category.java`, `.../service/ActivityLogService.java`
 
-- [ ] 🟢 **Make the bonus roll visible; stop discarding the level-up event.**
-  The RandomGenerator bonus is applied silently (no `bonusApplied` flag), and the sealed `LevelOutcome.LeveledUp` is computed then thrown away. Return a `leveledUp: true` / bonus breakdown so clients can react.
-  - Files: `activity-service/.../service/ActivityLogService.java`, `gamification-service/.../service/LevelTrackerService.java`
+- [x] ~~🟢 **Make the bonus roll visible; stop discarding the level-up event.**~~ ✅ **Fixed.**
+  `ActivityLogResponse` gained `bonusApplied`/`bonusMultiplier`/`leveledUp`; `LevelTrackerDto` gained `leveledUp`. **Caveat carried forward from the fix**: these three fields are computed in-memory at write time, not persisted — every `GET` endpoint that returns either DTO hardcodes them to `false`/`1.0`/`false` regardless of the row's real history. Only the specific `POST` response that created the data reflects real values. See [API.md § Known Issues Summary](API.md#known-issues-summary).
 
 ---
 
@@ -53,7 +50,7 @@ Real correctness / trust gaps in how the app behaves.
 - [ ] 🟡 **Streaks** — highest-leverage gamification feature, currently absent. Needs `lastActivityDate` per user/activity + consecutive-day logic; pairs with the existing bonus multiplier.
 - [ ] 🟡 **Achievements / badges** and **leaderboards** — the unused `LevelTrackerRepository.getTotalXpByUserId` query is already the basis for cross-activity totals / ranking.
 - [ ] 🟡 **Level-up notifications / events** — surface the `LeveledUp` outcome instead of discarding it.
-- [ ] 🟡 **springdoc-openapi (Swagger UI)** — zero live API docs today; `API.md` is hand-maintained and has already drifted. Generated OpenAPI keeps docs honest and enables typed client generation (kills the DTO-duplication problem below).
+- [x] ~~🟡 **springdoc-openapi (Swagger UI)**~~ ✅ **Done.** All three application services (gateway, activity, gamification) expose live Swagger UI (`/swagger-ui.html`) and OpenAPI JSON (`/v3/api-docs`) — see [API.md § Interactive API Docs](API.md#interactive-api-docs-swagger). `API.md` itself is still hand-maintained, so it can still drift from the generated spec; the DTO-duplication problem below is unaffected.
 - [ ] 🟢 **Event-driven decoupling (Kafka/RabbitMQ)** for activity→gamification — also solves the "save order / outage loses data" issue.
 - [ ] 🟢 **Analytics endpoints** — XP over time, per-category summaries, weekly reports.
 
@@ -61,11 +58,9 @@ Real correctness / trust gaps in how the app behaves.
 
 ## Places of Improvement (engineering quality / operability)
 
-- [ ] 🔴 **Add a real test suite.**
-  All four `*ApplicationTests` are just `contextLoads()`. The XP math, level thresholds, auth/authorization, and Feign contracts are entirely uncovered — which is why every change has needed manual verification. Add: unit tests for service math, `@WebMvcTest` for controllers + `@PreAuthorize`, `@DataJpaTest` for the custom `@Query`s, Testcontainers for end-to-end.
+- [x] ~~🔴 **Add a real test suite.**~~ **Largely done.** All three application services now have `@WebMvcTest` controller tests, `@DataJpaTest` repository tests, and Mockito service tests (XP math, level thresholds, the IDOR-fix header wiring, auth). Remaining gap: no Testcontainers/end-to-end suite exercising the real Gateway → activity-service → gamification-service Feign contract together — everything today is per-service with mocks at the boundary.
 
-- [ ] 🔴 **Wire up health/observability (currently inert).**
-  Every `application.yaml` configures `management.endpoints...health`, but **no module depends on `spring-boot-starter-actuator`**, so `/actuator/health` 404s — docker-compose has no real healthchecks and Eureka can't health-check properly. Add actuator (liveness/readiness), Micrometer + Prometheus, and distributed tracing (Micrometer Tracing/Zipkin) — there's currently no way to trace a request across gateway→activity→gamification.
+- [x] ~~🔴 **Wire up health/observability (currently inert).**~~ ✅ **Partially done.** `spring-boot-starter-actuator` is now a dependency on all four services, exposing `health` + `info` (with liveness/readiness probe groups enabled). Each Dockerfile has a real `HEALTHCHECK` against it, and `docker-compose.yml` gates every service's startup on `depends_on: condition: service_healthy` (postgres → eureka-server → gateway → activity → gamification) — see [API.md § Health Checks](API.md#health-checks-actuator). **Still open:** Micrometer + Prometheus metrics (`/actuator/metrics` isn't exposed) and distributed tracing — there's still no way to trace one request across gateway→activity→gamification.
 
 - [ ] 🟡 **Add bean validation.**
   DTOs only have ad-hoc compact-constructor checks. Add `jakarta.validation` (`@Valid`, `@NotNull`, `@Positive`, cross-field time-range checks) with a `MethodArgumentNotValidException` → `ProblemDetail` handler.
@@ -74,7 +69,7 @@ Real correctness / trust gaps in how the app behaves.
   `ddl-auto: update` everywhere is risky beyond dev — move to Flyway/Liquibase. Add indexes on hot query columns (`user_id`, `activity_id`). The shared `tracker_db` across all three services couples them (breaks service-DB independence).
 
 - [ ] 🟡 **Add Feign resilience.**
-  No timeouts, retries, circuit breaker, or fallbacks (no Resilience4j). A slow/failing gamification service fails every activity log. Also, the gateway's `GatewayExceptionHandler` only maps `FeignException.NotFound` — a downstream 400/503 becomes a generic 500 at the gateway.
+  No timeouts, retries, circuit breaker, or fallbacks (no Resilience4j) on activity-service's Feign call to gamification-service. A slow/failing gamification service fails every activity log. (The gateway itself no longer uses Feign at all — it routes declaratively via Spring Cloud Gateway — so this is now scoped to activity-service→gamification-service only; downstream error bodies passed through the gateway are unmodified pass-throughs, not re-wrapped, per [API.md § Error Response Format](API.md#error-response-format).)
 
 - [ ] 🟡 **Remove DTO triplication.**
   `LevelTrackerDto`, `ActivityResponse`, etc. are copy-pasted across all three services and hand-synced — the exact drift that caused the original `getActivity`/`getAllActivities` bug. Use a shared contract module or OpenAPI-generated clients.
@@ -89,8 +84,15 @@ Real correctness / trust gaps in how the app behaves.
 
 ## Top 5 to do first
 
-1. 🔴 **Derive `userId` from the token + enforce ownership** — fixes the IDOR, the biggest real risk.
-2. 🔴 **Save the activity log before calling gamification + add Feign resilience** — stop losing data on outages.
-3. 🔴 **Optimistic locking + `(userId, activityId)` unique constraint on `LevelTracker`** — fix the lost-update race.
-4. 🔴 **A real test suite** — the XP/level/auth logic is completely uncovered.
-5. 🟡 **Actuator + bean validation** — operability + input correctness, small effort, high payoff.
+~~1. 🔴 Derive `userId` from the token + enforce ownership~~ — ✅ done (writes only; reads intentionally left open).
+~~2. 🔴 Optimistic locking / unique constraint on `LevelTracker`~~ — ✅ done (PR #29).
+~~3. 🔴 A real test suite~~ — largely done; Testcontainers end-to-end still missing.
+~~4. 🟡 Actuator~~ — ✅ done (`health`/`info` + Docker healthchecks + compose startup gating); bean validation still open.
+
+Current top priorities, re-ranked:
+
+1. 🔴 **Save the activity log before calling gamification + add Feign resilience** — still open; an outage or slow gamification-service currently fails/loses the activity log.
+2. 🔴 **Fix the pre-existing `POST /activitylog/` 500** — `RandomGenerator.getDefault()` fails to resolve `"L32X64MixRandom"` on some JVM/container images, discovered live while testing the IDOR fix; unrelated to it but currently blocks that endpoint outright.
+3. 🟡 **Bean validation** (`@Valid`/`jakarta.validation`) — input correctness is still mostly ad-hoc compact-constructor checks.
+4. 🟡 **Provide a default level-progression curve** — every activity is still stuck at level 1 until thresholds are seeded manually.
+5. 🟢 **Metrics + tracing** — `/actuator/health` exists now; `/actuator/metrics` and cross-service tracing still don't.

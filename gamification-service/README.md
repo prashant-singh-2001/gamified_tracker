@@ -47,12 +47,11 @@ Fetch one row by its numeric surrogate id.
 - `404 Not Found` → `ProblemDetail` (`"LevelTracker with id: {id} not found"`)
 
 #### `POST /level`
-Create-or-update XP for a `(userId, activityId)` pair and recompute level. This is the endpoint the Activity Service calls over Feign after each activity log.
+Create-or-update XP for a `(userId, activityId)` pair and recompute level. This is the endpoint the Activity Service calls over Feign after each activity log — it's also directly reachable through the Gateway at `/api/level`. Requires a `userId` request header (Long, **required** — missing it is rejected before the service layer runs); through the Gateway or activity-service's internal Feign call this is a trusted, JWT-derived value, but a direct call to `:8082` must supply it manually since this service has no security layer of its own.
 
-Request — `LevelTrackerRequestDTO`:
+Request — `LevelTrackerRequestDTO` (no `userId` field — see header above):
 | Field | Type | Notes |
 |-------|------|-------|
-| `userId` | Long | |
 | `activityId` | Long | |
 | `xp` | double | XP to **add**. Must be `>= 0` — a compact-constructor guard rejects negatives |
 
@@ -64,6 +63,7 @@ Response `200 OK` — `LevelTrackerDto`:
 | `level` | Integer | recomputed |
 | `totalXp` | double | accumulated total after this call |
 | `currentLevelXp` | double | XP within the current level (`totalXp − threshold.xpRequired`) |
+| `leveledUp` | boolean | `true` only if **this specific call** crossed a threshold. Every `GET` endpoint below hardcodes this to `false`, regardless of the row's actual level — it reflects the outcome of a write, not stored state |
 
 - `400 Bad Request` → `ProblemDetail` (`"Invalid request body"`) if `xp` is negative.
 
@@ -123,11 +123,11 @@ Unique constraint **`uk_level_tracker_user_activity`** on `(user_id, activity_id
 
 Concurrency-safe XP accumulation (fixes the lost-update race — [issue #5](https://github.com/prashant-singh-2001/gamified_tracker/issues/5), merged in [PR #29](https://github.com/prashant-singh-2001/gamified_tracker/pull/29)):
 
-1. **`insertIfAbsent(userId, activityId)`** — native `INSERT … ON CONFLICT (user_id, activity_id) DO NOTHING`. Atomically creates the zero-state row if absent; the affected-row count tells us whether this call **created** the row.
+1. **`insertIfAbsent(userId, activityId)`** — native `INSERT … ON CONFLICT (user_id, activity_id) DO NOTHING`. Atomically creates the zero-state row if absent; the affected-row count tells us whether this call **created** the row. `userId` is now an explicit method parameter (from the trusted request header), not read off the request DTO.
 2. **`findByUserIdAndActivityIdForUpdate(...)`** — `@Lock(PESSIMISTIC_WRITE)` → `SELECT … FOR UPDATE`, locking the row for the rest of the transaction so concurrent updates serialize instead of racing.
 3. If the row already existed, **archive the previous state** (snapshot taken *before* any mutation).
-4. Add `xp` to `totalXp`, then **`applyLevel(...)`**: query the highest reached threshold and set `level` / `currentLevelXp` via the sealed `LevelOutcome` (`LeveledUp` vs `InProgress`) with `instanceof` pattern matching.
-5. Persist and return the DTO.
+4. Add `xp` to `totalXp`, then **`applyLevel(...)`**: query the highest reached threshold and set `level` / `currentLevelXp` via the sealed `LevelOutcome` (`LeveledUp` vs `InProgress`) with `instanceof` pattern matching. Returns a `boolean` — `true` only for a `LeveledUp` outcome on *this* call — used to populate the response's `leveledUp` field.
+5. Persist and return the DTO, including the real `leveledUp` value for this call. All read paths (`findAll`, `findById`, `findByUserId`, `findByActivityId`) go through a separate one-arg mapper that always sets `leveledUp: false`.
 
 All in one `@Transactional` method — no retry loop.
 
@@ -175,8 +175,8 @@ Covered by `@WebMvcTest` controller tests, `@DataJpaTest` repository tests, and 
 ## Troubleshooting
 
 - **Everyone stays at level 1** — no thresholds are seeded by default. `POST /threshold` a curve (e.g. level 2 at `xpRequired: 100`) for the activity first. (A default curve is proposed in [issue #8](https://github.com/prashant-singh-2001/gamified_tracker/issues/8).)
-- **`POST /level` returns 400** — `xp` was negative; the DTO rejects it before persistence.
-- **`/actuator/health` 404s** — actuator not yet wired ([issue #28](https://github.com/prashant-singh-2001/gamified_tracker/issues/28)).
+- **`POST /level` returns 400 with a negative-xp message** — `xp` was negative; the DTO rejects it before persistence. **A different 400 (missing header)** means the `userId` request header wasn't sent — required on every `POST /level`.
+- **Health check:** `curl http://localhost:8082/actuator/health` — `spring-boot-starter-actuator` is wired (exposes `health`, `info`; Docker healthcheck depends on this).
 - **Schema/constraint errors on startup after a model change** — `ddl-auto: update` won't retrofit new constraints onto existing data; recreate the dev volume with `docker compose down -v`.
 
 ## Related docs

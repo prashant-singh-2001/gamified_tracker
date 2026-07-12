@@ -41,8 +41,7 @@ This service exposes **no application REST API**. What it does serve:
 |-----|---------|
 | `http://localhost:8761/` | Eureka dashboard — lists registered applications and their instances/status |
 | `http://localhost:8761/eureka/apps` | Raw registry (XML/JSON) consumed by clients — not meant for manual use |
-
-> Note: `/actuator/health` is **not** available — `spring-boot-starter-actuator` is not yet a dependency (tracked in [issue #28](https://github.com/prashant-singh-2001/gamified_tracker/issues/28)).
+| `http://localhost:8761/actuator/health` | Health check — `spring-boot-starter-actuator` is now a dependency, exposing `health` and `info` |
 
 ## Configuration
 
@@ -54,9 +53,12 @@ From [`src/main/resources/application.yaml`](src/main/resources/application.yaml
 | `eureka.client.register-with-eureka` | `false` | The server does not register itself |
 | `eureka.client.fetch-registry` | `false` | The server does not pull a registry from a peer |
 | `eureka.instance.hostname` | `localhost` | Advertised hostname |
-| `eureka.server.enable-self-preservation` | `true` | Keeps instances during network blips instead of aggressively evicting them |
+| `management.endpoints.web.exposure.include` | `health,info` | Actuator endpoints exposed over HTTP |
+| `management.endpoint.health.probes.enabled` | `true` | Enables `/actuator/health/liveness` and `/actuator/health/readiness` probe groups |
 
 Clients point at it via `eureka.client.service-url.defaultZone: http://eureka-server:8761/eureka` (see each client service's `application.yaml`).
+
+> The current `application.yaml` sets `enable-self-preservation: true` nested under `management.server`, not `eureka.server` (the property Eureka's self-preservation actually lives under). This is likely a misplaced key rather than intentional — worth a fix — though its practical effect is muted since Eureka's own default for self-preservation is already `true`.
 
 ## Running
 
@@ -89,7 +91,8 @@ Contains the default `EurekaServerApplicationTests` context-load test.
 
 - **A service isn't showing on the dashboard** — check that client's `eureka.client.service-url.defaultZone` resolves (`eureka-server` hostname exists on the Docker network; use `localhost:8761` when running a client outside Docker), and that the client actually started.
 - **Instances linger after a service dies** — self-preservation is on, so eviction is deliberately slow; expected in dev.
-- **Startup ordering** — bring Eureka up before the clients, or clients log connection-refused until it's reachable (they retry).
+- **Startup ordering** — bring Eureka up before the clients, or clients log connection-refused until it's reachable (they retry). Under `docker-compose up`, this is enforced automatically: every client service's `depends_on` gates on Eureka reporting `service_healthy` via its Dockerfile `HEALTHCHECK` against `/actuator/health`.
+- **Health check:** `curl http://localhost:8761/actuator/health`.
 
 ## Related docs
 

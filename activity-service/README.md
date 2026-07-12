@@ -66,12 +66,11 @@ Response `200 OK` — `ActivityResponseRecord` (`name`, `category`, `xpMultiplie
 Fetch one log by numeric id. `200 OK` → `ActivityLogResponse`, or `404 Not Found` → `ProblemDetail`.
 
 #### `POST /activitylog/`
-Record a session, compute XP, and notify gamification.
+Record a session, compute XP, and notify gamification. Requires a `userId` request header (Long, **required** — a missing header is rejected before the service layer even runs). Through the Gateway this header is injected from the caller's JWT and can't be spoofed; hit directly on `:8081` it's caller-supplied, since this service has no security layer of its own.
 
-Request — `ActivityLogRequest`:
+Request — `ActivityLogRequest` (no `userId` field — see header above):
 | Field | Type | Notes |
 |-------|------|-------|
-| `userId` | Long | |
 | `activityName` | String | must match an existing `Activity.name`, else `404` |
 | `startTime` | ISO-8601 | |
 | `endTime` | ISO-8601 | should be after `startTime` |
@@ -89,11 +88,16 @@ Response `200 OK` — `ActivityLogResponse`:
 | `xpEarned` | double | `durationMinutes × activity.xpMultiplier × bonus` |
 | `notes` | String | |
 | `createdAt` | ISO-8601 | |
+| `bonusApplied` | boolean | `true` if the XP-bonus roll succeeded for this session |
+| `bonusMultiplier` | double | the multiplier actually used — `1.0` if no bonus, else the rolled `[1.1, 1.5)` value |
+| `leveledUp` | boolean | `true` if this XP push crossed a level threshold, per the Gamification Service's response |
 
 - `404 Not Found` → `ProblemDetail` if `activityName` doesn't exist.
 
 #### `GET /activitylog/user/{id}`
 All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
+
+> `GET /activitylog/{id}` and `GET /activitylog/user/{id}` always return `bonusApplied: false`, `bonusMultiplier: 1.0`, `leveledUp: false` — these three fields aren't persisted columns, only computed in-memory on the `POST` that created the log, so historical reads can't recover the real values.
 
 ## Data model
 
@@ -112,7 +116,7 @@ All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | bigint | PK |
-| `user_id` | bigint | from auth (currently client-supplied) |
+| `user_id` | bigint | from the trusted `userId` request header (gateway-injected, not client-body-supplied — see API reference above) |
 | `activity` | FK → `activity` | `@ManyToOne` |
 | `start_time` / `end_time` | timestamp | |
 | `duration_minutes` | bigint | computed |
@@ -124,11 +128,11 @@ All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 
 ## Key internal flow — `ActivityLogServiceImpl.addActivityLogResponseResponseEntity()`
 
-1. Resolve the `Activity` by name (`404` if missing) and build the `ActivityLog`.
+1. Resolve the `Activity` by name (`404` if missing) and build the `ActivityLog`, with `userId` taken from the `userId` request header (not the request body).
 2. `durationMinutes = Duration.between(startTime, endTime).toMinutes()`.
-3. **XP bonus roll:** `RandomGenerator.getDefault()` — 20% chance of a `1.1–1.5×` bonus, else `1.0×`. `xpEarned = durationMinutes × activity.xpMultiplier × bonus`.
-4. **Feign call** `gamificationClient.createLevelTracker(new LevelTrackerRequestDTO(userId, activityId, xpEarned))` → gamification `POST /level`.
-5. Save the log and return `ActivityLogResponse`.
+3. **XP bonus roll:** `RandomGenerator.getDefault()` — 20% chance of a `1.1–1.5×` bonus, else `1.0×`. `xpEarned = durationMinutes × activity.xpMultiplier × bonus`. `bonusApplied`/`bonusMultiplier` are captured from this roll for the response.
+4. **Feign call** `gamificationClient.createLevelTracker(userId, new LevelTrackerRequestDTO(activityId, xpEarned))` — `userId` goes as an explicit Feign header parameter, not in the body — → gamification `POST /level`. The response's `leveledUp` flag is read back and threaded into this endpoint's own response.
+5. Save the log and return `ActivityLogResponse`, including `bonusApplied`, `bonusMultiplier`, and `leveledUp`.
 
 > ⚠️ Known ordering issue: the Feign call currently happens **before** the local save — if gamification is down, the log isn't persisted. Tracked in [issue #4](https://github.com/prashant-singh-2001/gamified_tracker/issues/4).
 
@@ -162,7 +166,8 @@ Includes `@WebMvcTest` controller tests, a `@DataJpaTest` repository test, and M
 
 - **`POST /activitylog/` fails when gamification is down** — see the ordering issue above ([#4](https://github.com/prashant-singh-2001/gamified_tracker/issues/4)).
 - **`activityName` not found → 404** — the activity must be created via `POST /activity/` first.
-- **`/actuator/health` 404s** — actuator not yet wired ([issue #28](https://github.com/prashant-singh-2001/gamified_tracker/issues/28)).
+- **`400` on `POST /activitylog/`** — the `userId` header is required; a request without it is rejected before the service layer runs. The Gateway supplies it automatically; a direct call to `:8081` must set it manually.
+- **Health check:** `curl http://localhost:8081/actuator/health` — `spring-boot-starter-actuator` is wired (exposes `health`, `info`; Docker healthcheck depends on this).
 
 ## Related docs
 

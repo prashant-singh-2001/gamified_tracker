@@ -20,6 +20,23 @@ The Gateway's own `SecurityConfig` `permitAll`s `/swagger-ui.html`, `/swagger-ui
 
 ---
 
+## Health Checks (Actuator)
+
+All four services — API Gateway, Activity Service, Gamification Service, and Eureka Server — depend on `spring-boot-starter-actuator` and expose the same two endpoints, unauthenticated:
+
+| Service | Health | Info |
+|---|---|---|
+| API Gateway | http://localhost:8080/actuator/health | http://localhost:8080/actuator/info |
+| Activity Service | http://localhost:8081/actuator/health | http://localhost:8081/actuator/info |
+| Gamification Service | http://localhost:8082/actuator/health | http://localhost:8082/actuator/info |
+| Eureka Server | http://localhost:8761/actuator/health | http://localhost:8761/actuator/info |
+
+Only `health` and `info` are exposed (`management.endpoints.web.exposure.include: health,info`) — no `/actuator/env`, `/actuator/metrics`, etc. `management.endpoint.health.probes.enabled: true` also turns on Kubernetes-style probe groups: `/actuator/health/liveness` and `/actuator/health/readiness`.
+
+On the Gateway specifically, `/actuator/**` is `permitAll` in `SecurityConfig` and exempted in `JwtFilter.shouldNotFilter`, so no JWT is needed. Each service's own Dockerfile bakes a `HEALTHCHECK` against its `/actuator/health`, and `docker-compose.yml` gates every service's startup on its dependencies' health (`depends_on: condition: service_healthy`) in the order postgres → eureka-server → gateway → activity → gamification.
+
+---
+
 ## Authentication
 
 All API Gateway endpoints require a JWT **except** `/auth/**`. Obtain a token via register or login, then send it on every subsequent request:
@@ -116,7 +133,7 @@ Create an activity. **Requires `ADMIN` role** — a non-admin token gets `403`.
 #### `GET /api/activitylog/{id}`
 Fetch one activity log by its numeric id. Requires auth. **Open read by design** — any authenticated user can look up any log by id, not just their own (players can view each other's activity/stats; this is a social feature, not an oversight).
 
-**Response:** `200 OK` (shape below) or `404` if not found.
+**Response:** `200 OK` (shape below) or `404` if not found. `bonusApplied`/`bonusMultiplier`/`leveledUp` are always defaulted here, not the real historical values — see the note under `GET /api/activitylog/user/{id}` below.
 
 ---
 
@@ -144,6 +161,9 @@ Records an activity session, computes XP (with a chance of a bonus roll), and fo
 | `xpEarned` | double | computed: `durationMinutes × activity.xpMultiplier × bonus`. `bonus` is `1.0` normally, or a random value in `[1.1, 1.5)` on a ~20% chance roll |
 | `notes` | String | |
 | `createdAt` | ISO-8601 datetime string | |
+| `bonusApplied` | boolean | `true` if the ~20% bonus roll succeeded for this session |
+| `bonusMultiplier` | double | the multiplier actually used — `1.0` if no bonus, else the rolled `[1.1, 1.5)` value (same value baked into `xpEarned` above) |
+| `leveledUp` | boolean | `true` if this XP award crossed a level threshold in the Gamification Service, per that call's response |
 
 - `404` `ProblemDetail` if `activityName` doesn't match any activity.
 
@@ -152,7 +172,7 @@ Records an activity session, computes XP (with a chance of a bonus roll), and fo
 #### `GET /api/activitylog/user/{id}`
 List all activity logs for a user. Requires auth. **Open read by design** — `{id}` can be any user, not just the caller (see note above).
 
-**Response:** `200 OK`, JSON array of the same shape as the `POST` response above.
+**Response:** `200 OK`, JSON array of the same shape as the `POST` response above — **except** `bonusApplied`, `bonusMultiplier`, and `leveledUp` are always `false`/`1.0`/`false` here (and on `GET /api/activitylog/{id}`), regardless of what actually happened when the log was created. Those three fields aren't persisted columns; they're only populated on the `POST` response itself, from the in-memory roll and the Gamification Service's reply. Historical reads can't recover them.
 
 ---
 
@@ -168,7 +188,7 @@ List all activity logs for a user. Requires auth. **Open read by design** — `{
 | `GET` | `/api/level/user/{userId}` | authenticated | all rows for a given user — open read, `{userId}` can be anyone |
 | `GET` | `/api/level/activity/{activityId}` | authenticated | all rows for a given activity |
 
-All reads here are **intentionally open** — any authenticated player can view any other player's level/XP stats (see [Authentication](#authentication) and [Gamification Service § Level Tracker](#level-tracker-1)). `POST` is the one write: the `userId` field has been removed from the request body — the acting user comes from the trusted `userId` header instead, so XP can only ever be granted to the caller. Request/response bodies otherwise mirror the Gamification Service (`activityId`, `level`, `totalXp`, `currentLevelXp`).
+All reads here are **intentionally open** — any authenticated player can view any other player's level/XP stats (see [Authentication](#authentication) and [Gamification Service § Level Tracker](#level-tracker-1)). `POST` is the one write: the `userId` field has been removed from the request body — the acting user comes from the trusted `userId` header instead, so XP can only ever be granted to the caller. Request/response bodies otherwise mirror the Gamification Service (`activityId`, `level`, `totalXp`, `currentLevelXp`, `leveledUp`) — **`leveledUp` is only ever `true` on the `POST` response that actually crossed a threshold; every `GET` endpoint here hardcodes it to `false`**, regardless of the row's real state.
 
 ---
 
@@ -234,6 +254,7 @@ List every `LevelTracker` row (all users, all activities).
 | `level` | Integer | |
 | `totalXp` | double | total accumulated XP for this user+activity |
 | `currentLevelXp` | double | XP accumulated within the current level |
+| `leveledUp` | boolean | `true` only on the `POST /level` response that actually crossed a threshold on that call. **Every `GET` endpoint below hardcodes this to `false`**, even for a row currently above level 1 — it's not derived from stored state, only from the outcome of the specific write that populated it. |
 
 #### `GET /level/{id}`
 Fetch one `LevelTracker` by its internal numeric id. `200 OK` or `404` `ProblemDetail` (`"LevelTracker with id: {id} not found"`).
@@ -247,7 +268,7 @@ Create-or-update a user's XP for an activity, recalculating level. This is what 
 | `activityId` | Long | |
 | `xp` | double | XP to add. **Must be ≥ 0** — negative values are rejected with a `400` `ProblemDetail` (`"Invalid request body"`) before reaching the database |
 
-**Response:** `200 OK`, the resulting `LevelTrackerDto` (shape above). Level-up logic: crosses the highest `ActivityLevelThreshold` whose `xpRequired` is ≤ the new total XP for that activity; `currentLevelXp` becomes `totalXp − threshold.xpRequired`.
+**Response:** `200 OK`, the resulting `LevelTrackerDto` (shape above, including the real `leveledUp` value for this call). Level-up logic: crosses the highest `ActivityLevelThreshold` whose `xpRequired` is ≤ the new total XP for that activity; `currentLevelXp` becomes `totalXp − threshold.xpRequired`.
 
 #### `GET /level/user/{userId}`
 List all `LevelTracker` rows for a given user (one per activity they've logged). Open read — no ownership check; any caller can pass any `{userId}`.
@@ -319,4 +340,4 @@ All previously-tracked issues in this section have been resolved and verified en
 - ~~Inconsistent error shapes (raw `500`s / generic bodies instead of `ProblemDetail`)~~ — fixed for login failures and negative-`xp` validation.
 - ~~IDOR on writes: `POST /api/activitylog` and `POST /api/level` trusted a client-supplied `userId` in the body, so any authenticated user could log activities or grant XP **as any other user**~~ — fixed. The JWT now carries the numeric `userId`; `JwtFilter` injects it as a trusted `userId` header (overwriting/stripping any client-sent value) before the request is routed downstream; the write DTOs no longer accept `userId` in the body at all, and activity-service forwards the same header on its internal Feign call to gamification-service.
 
-Remaining non-issues, documented for awareness rather than as defects: `createdAt` is always server-set (client-supplied values on create endpoints are accepted but ignored); any caller can self-register as `ADMIN` (acceptable for a demo app); and **reads are intentionally open** — any authenticated user can view any other user's activity logs and level/XP stats (`GET .../{id}`, `GET .../user/{id}`) as a deliberate social/leaderboard-style feature, not an access-control gap. Direct calls to `:8081`/`:8082` bypassing the Gateway are also unauthenticated, since neither service has its own security layer — the `userId` header is only trustworthy when it arrives via the Gateway or the internal Feign call.
+Remaining non-issues, documented for awareness rather than as defects: `createdAt` is always server-set (client-supplied values on create endpoints are accepted but ignored); any caller can self-register as `ADMIN` (acceptable for a demo app); **reads are intentionally open** — any authenticated user can view any other user's activity logs and level/XP stats (`GET .../{id}`, `GET .../user/{id}`) as a deliberate social/leaderboard-style feature, not an access-control gap; and **`bonusApplied`/`bonusMultiplier`/`leveledUp` are only ever real on the specific `POST` response that computed them** — every `GET` endpoint that returns an `ActivityLogResponse` or `LevelTrackerDto` hardcodes these three fields to `false`/`1.0`/`false`, since they're not persisted, only computed in-memory at creation time. Direct calls to `:8081`/`:8082` bypassing the Gateway are also unauthenticated, since neither service has its own security layer — the `userId` header is only trustworthy when it arrives via the Gateway or the internal Feign call.

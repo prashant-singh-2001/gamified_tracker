@@ -60,21 +60,26 @@ That's it — all services, Eureka, and PostgreSQL start together.
 ## Try it
 
 ```bash
-# Register (returns a JWT)
+# Register (returns a JWT, carrying role + userId claims)
 curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
   -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret","role":"USER"}'
 
 # List activities (use the token from register)
 curl http://localhost:8080/api/activity -H "Authorization: Bearer <token>"
+
+# Health check (no token needed, any service)
+curl http://localhost:8080/actuator/health
 ```
 
-See **[API.md](API.md)** for the full endpoint reference.
+See **[API.md](API.md)** for the full endpoint reference — the Gateway also routes Level Tracker (`/api/level`) and Activity Level Threshold (`/api/threshold`) endpoints, not just Activity/Activity Log.
 
 ## Documentation
 
 - **[API.md](API.md)** — all REST endpoints and their request/response shapes
+- **[postman/](postman/)** — a ready-to-import Postman collection covering every endpoint, including a dedicated IDOR-verification folder
 - **[TODO-FIX.md](TODO-FIX.md)** — backlog of improvements and known gaps
+- Per-service READMEs: [eureka-server](eureka-server/README.md) · [api-gateway](api-gateway/README.md) · [activity-service](activity-service/README.md) · [gamification-service](gamification-service/README.md)
 
 ## Contributing
 
