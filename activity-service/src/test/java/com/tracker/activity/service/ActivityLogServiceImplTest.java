@@ -1,21 +1,24 @@
 package com.tracker.activity.service;
 
-import com.tracker.activity.client.GamificationClient;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.Category;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
-import com.tracker.activity.dto.LevelTrackerRequestDTO;
 import com.tracker.activity.exception.ActivityNotFoundException;
+import com.tracker.activity.messaging.ActivityLoggedEvent;
+import com.tracker.activity.outbox.OutboxEvent;
+import com.tracker.activity.outbox.OutboxEventRepository;
 import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.repository.ActivityRepository;
 import com.tracker.activity.service.impl.ActivityLogServiceImpl;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
@@ -38,10 +41,28 @@ public class ActivityLogServiceImplTest {
     private ActivityRepository activityRepository;
 
     @Mock
-    private GamificationClient gamificationClient;
+    private OutboxEventRepository outboxEventRepository;
 
-    @InjectMocks
+    // Real ObjectMapper (not mocked) so the outbox payload assertions exercise real
+    // serialization/deserialization, matching production behavior.
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     private ActivityLogServiceImpl activityLogService;
+
+    @BeforeEach
+    void setUp() {
+        activityLogService = new ActivityLogServiceImpl(
+                activityLogRepository, activityRepository, outboxEventRepository, objectMapper);
+    }
+
+    private void stubActivityAndSave(Activity activity, Long generatedId) {
+        when(activityRepository.findByName(activity.getName())).thenReturn(Optional.of(activity));
+        when(activityLogRepository.save(any(ActivityLog.class))).thenAnswer(invocation -> {
+            ActivityLog log = invocation.getArgument(0);
+            log.setId(generatedId);
+            return log;
+        });
+    }
 
     @Test
     @DisplayName("getActivityLogResponseEntity returns mapped response")
@@ -79,77 +100,83 @@ public class ActivityLogServiceImplTest {
     }
 
     @Test
-    @DisplayName("addActivityLogResponseResponseEntity saves, notifies gamification and returns response")
-    void testAddActivityLogResponseResponseEntity() {
+    @DisplayName("addActivityLogResponseResponseEntity saves the log BEFORE writing the outbox row (fixes #4)")
+    void addActivityLog_savesLogBeforeOutboxRow() {
         LocalDateTime now = LocalDateTime.now();
         Long userId = 2L;
-        // IDOR fix: userId is passed explicitly (from the trusted header), not on the
-        // request body, and is forwarded explicitly to the Feign call too.
-        // ActivityLogRequest request = new ActivityLogRequest(
-        //         2L,
-        //         "Run",
-        //         now,
-        //         now.plusMinutes(30),
-        //         "nice",
-        //         now
-        // );
-        ActivityLogRequest request = new ActivityLogRequest(
-                "Run",
-                now,
-                now.plusMinutes(30),
-                "nice",
-                now
-        );
-
+        ActivityLogRequest request = new ActivityLogRequest("Run", now, now.plusMinutes(30), "nice", now);
         Activity activity = Activity.builder().id(7L).name("Run").category(Category.HEALTH).xpMultiplier(2.0).active(true).createdAt(now).build();
+        stubActivityAndSave(activity, 100L);
 
-        when(activityRepository.findByName("Run")).thenReturn(Optional.of(activity));
-        when(activityLogRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
-        // when(gamificationClient.createLevelTracker(any())).thenReturn(null);
-        when(gamificationClient.createLevelTracker(anyLong(), any())).thenReturn(null);
+        activityLogService.addActivityLogResponseResponseEntity(userId, request);
 
-        // ResponseEntity<ActivityLogResponse> resp = activityLogService.addActivityLogResponseResponseEntity(request);
-        ResponseEntity<ActivityLogResponse> resp = activityLogService.addActivityLogResponseResponseEntity(userId, request);
-
-        assertNotNull(resp);
-        ActivityLogResponse body = resp.getBody();
-        assertEquals(2L, body.userId());
-        assertEquals(activity.getId(), body.activity().getId());
-        assertNotNull(body.xpEarned());
-
-        ArgumentCaptor<Long> userIdCaptor = ArgumentCaptor.forClass(Long.class);
-        ArgumentCaptor<LevelTrackerRequestDTO> captor = ArgumentCaptor.forClass(LevelTrackerRequestDTO.class);
-        verify(gamificationClient).createLevelTracker(userIdCaptor.capture(), captor.capture());
-
-        LevelTrackerRequestDTO sent = captor.getValue();
-        assertEquals(body.userId(), userIdCaptor.getValue());
-        assertEquals(body.activity().getId(), sent.activityId());
-        assertEquals(body.xpEarned(), sent.xp(), 1e-6);
+        InOrder inOrder = inOrder(activityLogRepository, outboxEventRepository);
+        inOrder.verify(activityLogRepository).save(any(ActivityLog.class));
+        inOrder.verify(outboxEventRepository).save(any(OutboxEvent.class));
     }
 
     @Test
-    @DisplayName("addActivityLogResponseResponseEntity throws when activity not found")
+    @DisplayName("addActivityLogResponseResponseEntity writes an outbox row carrying the correct ActivityLoggedEvent")
+    void addActivityLog_writesCorrectOutboxPayload() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        Long userId = 2L;
+        ActivityLogRequest request = new ActivityLogRequest("Run", now, now.plusMinutes(30), "nice", now);
+        Activity activity = Activity.builder().id(7L).name("Run").category(Category.HEALTH).xpMultiplier(2.0).active(true).createdAt(now).build();
+        stubActivityAndSave(activity, 100L);
+
+        ResponseEntity<ActivityLogResponse> resp = activityLogService.addActivityLogResponseResponseEntity(userId, request);
+        ActivityLogResponse body = resp.getBody();
+        assertNotNull(body);
+
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxEventRepository).save(captor.capture());
+        OutboxEvent outboxRow = captor.getValue();
+
+        assertEquals("ActivityLog", outboxRow.getAggregateType());
+        assertEquals(100L, outboxRow.getAggregateId());
+        assertEquals("ActivityLogged", outboxRow.getEventType());
+        assertEquals("100", outboxRow.getIdempotencyKey());
+        assertNull(outboxRow.getPublishedAt(), "unpublished until the relay picks it up");
+        assertNotNull(outboxRow.getCreatedAt());
+
+        ActivityLoggedEvent deserialized = objectMapper.readValue(outboxRow.getPayload(), ActivityLoggedEvent.class);
+        assertEquals(100L, deserialized.logId());
+        assertEquals(userId, deserialized.userId());
+        assertEquals(activity.getId(), deserialized.activityId());
+        assertEquals(body.xpEarned(), deserialized.xpEarned(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("addActivityLogResponseResponseEntity returns leveledUp=false (eventual) while bonusApplied still reflects the roll")
+    void addActivityLog_responseHasEventualLeveledUp() {
+        LocalDateTime now = LocalDateTime.now();
+        Long userId = 2L;
+        ActivityLogRequest request = new ActivityLogRequest("Run", now, now.plusMinutes(30), "nice", now);
+        Activity activity = Activity.builder().id(7L).name("Run").category(Category.HEALTH).xpMultiplier(2.0).active(true).createdAt(now).build();
+        stubActivityAndSave(activity, 100L);
+
+        ResponseEntity<ActivityLogResponse> resp = activityLogService.addActivityLogResponseResponseEntity(userId, request);
+        ActivityLogResponse body = resp.getBody();
+
+        assertNotNull(body);
+        assertFalse(body.leveledUp(), "leveledUp is now eventual — XP is applied asynchronously by the consumer");
+        // bonus is a 20%-chance random roll, so assert internal consistency rather than a fixed value:
+        // bonusApplied must agree with whether the multiplier actually deviated from 1.0.
+        assertEquals(body.bonusMultiplier() != 1.0, body.bonusApplied());
+    }
+
+    @Test
+    @DisplayName("addActivityLogResponseResponseEntity throws when activity not found (no outbox row written)")
     void testAddActivityLogResponseResponseEntityActivityMissing() {
         LocalDateTime now = LocalDateTime.now();
-        // ActivityLogRequest request = new ActivityLogRequest(
-        //         2L,
-        //         "Missing",
-        //         now,
-        //         now.plusMinutes(30),
-        //         "notes",
-        //         now
-        // );
-        ActivityLogRequest request = new ActivityLogRequest(
-                "Missing",
-                now,
-                now.plusMinutes(30),
-                "notes",
-                now
-        );
+        ActivityLogRequest request = new ActivityLogRequest("Missing", now, now.plusMinutes(30), "notes", now);
 
         when(activityRepository.findByName("Missing")).thenReturn(Optional.empty());
 
-        assertThrows(ActivityNotFoundException.class, () -> activityLogService.addActivityLogResponseResponseEntity(2L, request));
+        assertThrows(ActivityNotFoundException.class,
+                () -> activityLogService.addActivityLogResponseResponseEntity(2L, request));
+
+        verifyNoInteractions(outboxEventRepository);
     }
 
     @Test
@@ -170,4 +197,3 @@ public class ActivityLogServiceImplTest {
         verify(activityLogRepository).findByUserId(2L);
     }
 }
-

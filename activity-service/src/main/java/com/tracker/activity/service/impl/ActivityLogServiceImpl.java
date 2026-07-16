@@ -1,34 +1,35 @@
 package com.tracker.activity.service.impl;
 
-import com.tracker.activity.client.GamificationClient;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tracker.activity.dao.ActivityLog;
-import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.ActivityLogRequest;
-import com.tracker.activity.dto.LevelTrackerRequestDTO;
+import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.exception.ActivityNotFoundException;
+import com.tracker.activity.messaging.ActivityLoggedEvent;
+import com.tracker.activity.outbox.OutboxEvent;
+import com.tracker.activity.outbox.OutboxEventRepository;
 import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.repository.ActivityRepository;
 import com.tracker.activity.service.ActivityLogService;
+import lombok.AllArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.random.RandomGenerator;
+import java.util.concurrent.ThreadLocalRandom;
 
 
+@AllArgsConstructor
 @Service
 public class ActivityLogServiceImpl implements ActivityLogService {
     private final ActivityLogRepository activityLogRepository;
     private final ActivityRepository activityRepository;
-    private final GamificationClient gamificationClient;
+    private final OutboxEventRepository outboxEventRepository;   // was GamificationClient
+    private final ObjectMapper objectMapper;
 
-    public ActivityLogServiceImpl(ActivityLogRepository activityLogRepository, ActivityRepository activityRepository, GamificationClient gamificationClient) {
-        this.activityLogRepository = activityLogRepository;
-        this.activityRepository = activityRepository;
-        this.gamificationClient = gamificationClient;
-    }
 
     @Override
     public ResponseEntity<ActivityLogResponse> getActivityLogResponseEntity(Long id) {
@@ -40,24 +41,50 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     }
 
     @Override
-    public ResponseEntity<ActivityLogResponse> addActivityLogResponseResponseEntity(Long userId, ActivityLogRequest activityLogRequest) {
+    @Transactional
+    public ResponseEntity<ActivityLogResponse> addActivityLogResponseResponseEntity(
+            Long userId, ActivityLogRequest activityLogRequest) {
+
         var activityLog = mapToActivityLog(userId, activityLogRequest);
-        activityLog.setDurationMinutes(Duration.between(activityLog.getStartTime(), activityLog.getEndTime()).toMinutes());
+        activityLog.setDurationMinutes(
+                Duration.between(activityLog.getStartTime(), activityLog.getEndTime()).toMinutes());
         activityLog.setUserId(userId);
 
-        var random = RandomGenerator.getDefault();
+        // ThreadLocalRandom avoids the pre-existing RandomGenerator.getDefault() "L32X64MixRandom"
+        // failure (bug #2) that 500s this endpoint on some JVM/container images.
+        var random = ThreadLocalRandom.current();
         double multiplier = activityLog.getActivity().getXpMultiplier();
-        double bonus = random.nextDouble() < 0.2 ? random.nextDouble(1.1, 1.5) : 1.0; // 20% chance of a bonus roll
+        double bonus = random.nextDouble() < 0.2 ? random.nextDouble(1.1, 1.5) : 1.0;
         activityLog.setXpEarned(activityLog.getDurationMinutes() * multiplier * bonus);
 
-        var levelTrackerDto = gamificationClient.createLevelTracker(userId, new LevelTrackerRequestDTO(activityLog.getActivity().getId(), activityLog.getXpEarned()));
+        // 1) persist the log FIRST (fixes #4) — the generated id is our logId / idempotency key
+        var saved = activityLogRepository.save(activityLog);
 
-        activityLogRepository.save(activityLog);
+        // 2) SAME transaction: write the outbox row (atomic with the log insert)
+        var event = new ActivityLoggedEvent(
+                saved.getId(), userId, saved.getActivity().getId(), saved.getXpEarned());
+        outboxEventRepository.save(OutboxEvent.builder()
+
+                .aggregateType("ActivityLog")
+                .aggregateId(saved.getId())
+                .eventType("ActivityLogged")
+                .payload(toJson(event))
+                .idempotencyKey(String.valueOf(saved.getId()))
+                .createdAt(LocalDateTime.now())
+                .publishedAt(null)
+                .build());
 
         boolean bonusApplied = bonus != 1.0;
-        boolean leveledUp = levelTrackerDto != null && levelTrackerDto.leveledUp();
+        // leveledUp is now EVENTUAL (XP applied async by the consumer) -> false at write time
+        return ResponseEntity.ok(mapToActivityLogResponse(saved, bonusApplied, bonus, false));
+    }
 
-        return ResponseEntity.ok(mapToActivityLogResponse(activityLog, bonusApplied, bonus, leveledUp));
+    private String toJson(ActivityLoggedEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize ActivityLoggedEvent", e);
+        }
     }
 
     public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(Long id) {

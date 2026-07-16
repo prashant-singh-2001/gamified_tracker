@@ -15,6 +15,20 @@ services:
       retries: 5
       start_period: 10s
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: tracker-rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI (guest/guest)
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   eureka-server:
     build: ./eureka-server
     container_name: eureka-server
@@ -48,6 +62,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     env_file: .env
 
   activity:
@@ -61,6 +77,8 @@ services:
       eureka-server:
         condition: service_healthy
       gateway:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     env_file: .env
 
@@ -77,6 +95,8 @@ services:
       activity:
         condition: service_healthy
       gateway:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     env_file: .env
 

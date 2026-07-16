@@ -12,6 +12,12 @@ spring:
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
 
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
+
   jpa:
     hibernate:
       ddl-auto: update
@@ -72,3 +78,11 @@ eureka:
     metadata-map:
       zone: ap-south-1
       version: v1
+
+messaging:
+  exchange: activity.events
+  routing-key: activity.logged
+
+outbox:
+  relay:
+    delay-ms: 2000

@@ -13,7 +13,7 @@ A microservices-based activity tracker with gamification. Log activities, earn X
      ┌───────┴────────┐
      ▼                ▼
 ┌──────────┐   ┌──────────────┐
-│ Activity │◄─►│ Gamification │   (Feign)
+│ Activity │──►│ Gamification │   (async via RabbitMQ)
 │  :8081   │   │    :8082     │
 └────┬─────┘   └──────┬───────┘
      └────────┬───────┘
@@ -31,7 +31,7 @@ A microservices-based activity tracker with gamification. Log activities, earn X
 
 ## Tech stack
 
-Java 17 · Spring Boot 3.5 · Spring Cloud 2025 (Eureka, OpenFeign) · Spring Security + JWT · PostgreSQL 15 · Maven · Docker Compose
+Java 17 · Spring Boot 3.5 · Spring Cloud 2025 (Eureka) · RabbitMQ (Spring AMQP) · Spring Security + JWT · PostgreSQL 15 · Maven · Docker Compose
 
 ## Quick start
 

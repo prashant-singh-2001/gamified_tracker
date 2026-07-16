@@ -6,6 +6,19 @@ spring:
     ansi:
       enabled: ALWAYS
 
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000ms
+        default-requeue-rejected: false
+
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/tracker_db}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
@@ -72,3 +85,10 @@ eureka:
     metadata-map:
       zone: ap-south-1
       version: v1
+
+messaging:
+  exchange: activity.events
+  routing-key: activity.logged
+  queue: gamification.activity-logged.q
+  dlx: activity.events.dlx
+  dlq: gamification.activity-logged.dlq

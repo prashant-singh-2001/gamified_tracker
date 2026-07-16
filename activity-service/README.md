@@ -2,34 +2,40 @@
 
 **Manages activity definitions and logs activity sessions, awarding XP.** · Port **8081**
 
-Owns the catalog of activities (Study, Gaming, Work, …) and the record of each logged session. When a session is logged it computes duration and XP (with an occasional random bonus) and forwards the earned XP to the Gamification Service over Feign.
+Owns the catalog of activities (Study, Gaming, Work, …) and the record of each logged session. When a session is logged it computes duration and XP (with an occasional random bonus), saves the log, and — since issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16) — publishes an `ActivityLogged` domain event so the Gamification Service can apply the XP **asynchronously**. This service is now a pure event **producer**: it has no Feign client and makes no synchronous call to gamification-service at all. Full design: [`EVENT_DRIVEN_DECOUPLING.md`](../EVENT_DRIVEN_DECOUPLING.md).
 
 ## Role in the system
 
 ```
-  api-gateway ──Feign──►  activity-service (8081)  ──Feign──►  gamification-service (8082)
-    (8080)                    │       POST /level (XP earned)
-                             ▼
-                       PostgreSQL (5433)
-                       activity, activity_log
+  api-gateway ──HTTP──►  activity-service (8081)          gamification-service (8082)
+    (8080)                    │                                     ▲
+                             ▼                                     │ @RabbitListener
+                       PostgreSQL (5433)                           │ (idempotent consumer)
+                       activity, activity_log,                     │
+                       outbox_event                                │
+                             │                                     │
+                             └──── OutboxRelay (@Scheduled) ──► RabbitMQ ──┘
+                                   publishes ActivityLoggedEvent   (activity.events
+                                   from outbox_event rows           exchange)
 ```
 
-Called by: **api-gateway**. Calls: **gamification-service** (`POST /level`) after each activity log. Registers with **Eureka**; persists to **PostgreSQL**.
+Called by: **api-gateway**. Publishes to: **RabbitMQ** (`ActivityLoggedEvent`, consumed by gamification-service — no direct HTTP/Feign call). Registers with **Eureka**; persists to **PostgreSQL**.
 
 ## Responsibilities
 
 - CRUD-ish management of `Activity` definitions (name, category, XP multiplier, active flag).
 - Record `ActivityLog` sessions (user, activity, start/end time, notes).
 - Compute `durationMinutes` and `xpEarned` (base × multiplier × optional random bonus).
-- Push earned XP to the Gamification Service so levels update.
+- **Transactional Outbox**: save the log and write an `outbox_event` row in one transaction, then relay it to RabbitMQ so the Gamification Service can apply the XP — decoupled from this request's success/failure.
 
 ## Tech stack
 
-- Java 17, Spring Boot 3.5, Spring Cloud 2025 (Eureka client, **OpenFeign**)
+- Java 17, Spring Boot 3.5, Spring Cloud 2025 (Eureka client)
+- **Spring AMQP** (`spring-boot-starter-amqp`) — RabbitMQ producer (`RabbitTemplate` + `Jackson2JsonMessageConverter`) and the `@Scheduled` outbox relay (`@EnableScheduling`)
 - Spring Data JPA + PostgreSQL
-- Java 17 idioms: **records** for DTOs, `switch` expression on `Category`, `java.util.random.RandomGenerator`
+- Java 17 idioms: **records** for DTOs, `switch` expression on `Category`, `java.util.concurrent.ThreadLocalRandom` for the XP-bonus roll
 - Interface + `impl/` service layout (`ActivityService`/`ActivityServiceImpl`, `ActivityLogService`/`ActivityLogServiceImpl`)
-- Entry point: `ActivityServiceApplication` (`@SpringBootApplication` + `@EnableFeignClients`)
+- Entry point: `ActivityServiceApplication` (`@SpringBootApplication` + `@EnableScheduling`; **no** `@EnableFeignClients` — Feign was removed)
 
 ## API reference
 
@@ -66,7 +72,7 @@ Response `200 OK` — `ActivityResponseRecord` (`name`, `category`, `xpMultiplie
 Fetch one log by numeric id. `200 OK` → `ActivityLogResponse`, or `404 Not Found` → `ProblemDetail`.
 
 #### `POST /activitylog/`
-Record a session, compute XP, and notify gamification. Requires a `userId` request header (Long, **required** — a missing header is rejected before the service layer even runs). Through the Gateway this header is injected from the caller's JWT and can't be spoofed; hit directly on `:8081` it's caller-supplied, since this service has no security layer of its own.
+Record a session, compute XP, save it, and publish an `ActivityLogged` event (async — see below) instead of calling gamification synchronously. Requires a `userId` request header (Long, **required** — a missing header is rejected before the service layer even runs). Through the Gateway this header is injected from the caller's JWT and can't be spoofed; hit directly on `:8081` it's caller-supplied, since this service has no security layer of its own.
 
 Request — `ActivityLogRequest` (no `userId` field — see header above):
 | Field | Type | Notes |
@@ -90,14 +96,14 @@ Response `200 OK` — `ActivityLogResponse`:
 | `createdAt` | ISO-8601 | |
 | `bonusApplied` | boolean | `true` if the XP-bonus roll succeeded for this session |
 | `bonusMultiplier` | double | the multiplier actually used — `1.0` if no bonus, else the rolled `[1.1, 1.5)` value |
-| `leveledUp` | boolean | `true` if this XP push crossed a level threshold, per the Gamification Service's response |
+| `leveledUp` | boolean | **Always `false` on this response.** XP is applied asynchronously by gamification-service's RabbitMQ consumer, so this endpoint can't know yet whether the session leveled the user up — check `GET /level/user/{id}` on gamification-service (or `GET /api/level/user/{id}` via the Gateway) shortly after |
 
 - `404 Not Found` → `ProblemDetail` if `activityName` doesn't exist.
 
 #### `GET /activitylog/user/{id}`
 All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 
-> `GET /activitylog/{id}` and `GET /activitylog/user/{id}` always return `bonusApplied: false`, `bonusMultiplier: 1.0`, `leveledUp: false` — these three fields aren't persisted columns, only computed in-memory on the `POST` that created the log, so historical reads can't recover the real values.
+> `GET /activitylog/{id}` and `GET /activitylog/user/{id}` always return `bonusApplied: false`, `bonusMultiplier: 1.0`, `leveledUp: false` — `bonusApplied`/`bonusMultiplier` aren't persisted columns, only computed in-memory on the `POST` that created the log; `leveledUp` is `false` everywhere now, including on the `POST` response itself (see above).
 
 ## Data model
 
@@ -126,31 +132,46 @@ All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 
 `Category` enum: `STUDY, WORK, GAMING, CHORES, HEALTH, OTHER` — also carries a `baseXpMultiplier()` switch expression.
 
+**`outbox_event`** — Transactional Outbox table (new in #16):
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | bigint | PK, identity |
+| `aggregate_type` | String | `"ActivityLog"` |
+| `aggregate_id` | bigint | = the `activity_log.id` this event describes |
+| `event_type` | String | `"ActivityLogged"` |
+| `payload` | text | JSON-serialized `ActivityLoggedEvent(logId, userId, activityId, xpEarned)` |
+| `idempotency_key` | String, unique | = `aggregate_id` as a string; the consumer's dedup key |
+| `created_at` | timestamp | |
+| `published_at` | timestamp, nullable | `null` until `OutboxRelay` successfully publishes it to RabbitMQ |
+
 ## Key internal flow — `ActivityLogServiceImpl.addActivityLogResponseResponseEntity()`
+
+Now `@Transactional` (fixes [issue #4](https://github.com/prashant-singh-2001/gamified_tracker/issues/4) — the log used to be at risk of being lost if the old synchronous gamification call failed):
 
 1. Resolve the `Activity` by name (`404` if missing) and build the `ActivityLog`, with `userId` taken from the `userId` request header (not the request body).
 2. `durationMinutes = Duration.between(startTime, endTime).toMinutes()`.
-3. **XP bonus roll:** `RandomGenerator.getDefault()` — 20% chance of a `1.1–1.5×` bonus, else `1.0×`. `xpEarned = durationMinutes × activity.xpMultiplier × bonus`. `bonusApplied`/`bonusMultiplier` are captured from this roll for the response.
-4. **Feign call** `gamificationClient.createLevelTracker(userId, new LevelTrackerRequestDTO(activityId, xpEarned))` — `userId` goes as an explicit Feign header parameter, not in the body — → gamification `POST /level`. The response's `leveledUp` flag is read back and threaded into this endpoint's own response.
-5. Save the log and return `ActivityLogResponse`, including `bonusApplied`, `bonusMultiplier`, and `leveledUp`.
+3. **XP bonus roll:** `ThreadLocalRandom.current()` — 20% chance of a `1.1–1.5×` bonus, else `1.0×`. `xpEarned = durationMinutes × activity.xpMultiplier × bonus`. `bonusApplied`/`bonusMultiplier` are captured from this roll for the response.
+4. **Save the `ActivityLog` FIRST** — the generated id becomes the event's `logId` / the outbox row's `idempotency_key`.
+5. **Same transaction:** build an `ActivityLoggedEvent(logId, userId, activityId, xpEarned)`, serialize it to JSON, and save an `OutboxEvent` row (`published_at: null`). No Feign call, no synchronous dependency on gamification-service being up.
+6. Return `ActivityLogResponse` with real `bonusApplied`/`bonusMultiplier`, but **`leveledUp` is always `false`** — it's now eventual (see `outbox/OutboxRelay.java` + gamification-service's `ActivityLoggedListener` for how it eventually gets applied).
 
-> ⚠️ Known ordering issue: the Feign call currently happens **before** the local save — if gamification is down, the log isn't persisted. Tracked in [issue #4](https://github.com/prashant-singh-2001/gamified_tracker/issues/4).
+Full design + code walkthrough: [`EVENT_DRIVEN_DECOUPLING.md`](../EVENT_DRIVEN_DECOUPLING.md).
 
 ## Configuration
 
-Standard env vars (root [`.env.example`](../.env.example)): `SPRING_DATASOURCE_URL/USERNAME/PASSWORD`, `SPRING_JPA_HIBERNATE_DDL_AUTO=update`, `server.port=8081`, `eureka.client.service-url.defaultZone`.
+Standard env vars (root [`.env.example`](../.env.example)): `SPRING_DATASOURCE_URL/USERNAME/PASSWORD`, `SPRING_JPA_HIBERNATE_DDL_AUTO=update`, `server.port=8081`, `eureka.client.service-url.defaultZone`, `SPRING_RABBITMQ_HOST/PORT/USERNAME/PASSWORD`, `outbox.relay.delay-ms` (default `2000`).
 
 ## Inter-service dependencies
 
-- **Calls:** gamification-service via `GamificationClient` (`@FeignClient(name = "gamification-service")` → `POST /level`).
+- **Publishes to:** RabbitMQ (`ActivityLoggedEvent`, exchange `activity.events`) — consumed by gamification-service. No Feign client, no synchronous HTTP call to any other service.
 - **Called by:** api-gateway.
-- **Infra:** Eureka, PostgreSQL.
+- **Infra:** Eureka, PostgreSQL, RabbitMQ.
 
 ## Running
 
 ```bash
-docker-compose up --build          # whole stack, from repo root
-# or standalone (needs Postgres + Eureka; gamification for the Feign call):
+docker-compose up --build          # whole stack, from repo root — includes RabbitMQ
+# or standalone (needs Postgres + Eureka + RabbitMQ reachable):
 cd activity-service && mvn spring-boot:run
 ```
 
@@ -160,15 +181,15 @@ cd activity-service && mvn spring-boot:run
 mvn test          # from activity-service/
 ```
 
-Includes `@WebMvcTest` controller tests, a `@DataJpaTest` repository test, and Mockito service tests (`ActivityServiceImplTest`, `ActivityLogServiceImplTest`).
+Includes `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (`ActivityRepositoryTest`, `OutboxEventRepositoryTest`), and Mockito service/component tests (`ActivityServiceImplTest`, `ActivityLogServiceImplTest`, `OutboxRelayTest`) — the outbox producer and the polling publisher are both covered without needing a real broker (mocked `OutboxEventRepository`/`RabbitTemplate`).
 
 ## Troubleshooting
 
-- **`POST /activitylog/` fails when gamification is down** — see the ordering issue above ([#4](https://github.com/prashant-singh-2001/gamified_tracker/issues/4)).
 - **`activityName` not found → 404** — the activity must be created via `POST /activity/` first.
 - **`400` on `POST /activitylog/`** — the `userId` header is required; a request without it is rejected before the service layer runs. The Gateway supplies it automatically; a direct call to `:8081` must set it manually.
+- **XP never shows up on gamification-service** — check the RabbitMQ management UI (`http://localhost:15672`, guest/guest) for a stuck/DLQ'd message, and confirm `outbox_event.published_at` is actually getting stamped (the `OutboxRelay` polls every `outbox.relay.delay-ms`, default 2s).
 - **Health check:** `curl http://localhost:8081/actuator/health` — `spring-boot-starter-actuator` is wired (exposes `health`, `info`; Docker healthcheck depends on this).
 
 ## Related docs
 
-- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md)
+- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../EVENT_DRIVEN_DECOUPLING.md)
