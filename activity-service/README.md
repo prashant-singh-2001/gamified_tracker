@@ -2,7 +2,7 @@
 
 **Manages activity definitions and logs activity sessions, awarding XP.** · Port **8081**
 
-Owns the catalog of activities (Study, Gaming, Work, …) and the record of each logged session. When a session is logged it computes duration and XP (with an occasional random bonus), saves the log, and — since issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16) — publishes an `ActivityLogged` domain event so the Gamification Service can apply the XP **asynchronously**. This service is now a pure event **producer**: it has no Feign client and makes no synchronous call to gamification-service at all. Full design: [`EVENT_DRIVEN_DECOUPLING.md`](../EVENT_DRIVEN_DECOUPLING.md).
+Owns the catalog of activities (Study, Gaming, Work, …) and the record of each logged session. When a session is logged it computes duration and XP (with an occasional random bonus), saves the log, and — since issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16) — publishes an `ActivityLogged` domain event so the Gamification Service can apply the XP **asynchronously**. This service is now a pure event **producer**: it has no Feign client and makes no synchronous call to gamification-service at all. Full design: [`EVENT_DRIVEN_DECOUPLING.md`](../docs/features/event-driven-decoupling.md).
 
 ## Role in the system
 
@@ -168,7 +168,7 @@ Now `@Transactional` (fixes [issue #4](https://github.com/prashant-singh-2001/ga
 5. **Same transaction:** build an `ActivityLoggedEvent(logId, userId, activityId, xpEarned)`, serialize it to JSON, and save an `OutboxEvent` row (`published_at: null`). No Feign call, no synchronous dependency on gamification-service being up.
 6. Return `ActivityLogResponse` with real `bonusApplied`/`bonusMultiplier`, but **`leveledUp` is always `false`** — it's now eventual (see `outbox/OutboxRelay.java` + gamification-service's `ActivityLoggedListener` for how it eventually gets applied).
 
-Full design + code walkthrough: [`EVENT_DRIVEN_DECOUPLING.md`](../EVENT_DRIVEN_DECOUPLING.md).
+Full design + code walkthrough: [`EVENT_DRIVEN_DECOUPLING.md`](../docs/features/event-driven-decoupling.md).
 
 ## Configuration
 
@@ -205,4 +205,4 @@ Includes `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (`Activ
 
 ## Related docs
 
-- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../EVENT_DRIVEN_DECOUPLING.md)
+- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../docs/features/event-driven-decoupling.md)

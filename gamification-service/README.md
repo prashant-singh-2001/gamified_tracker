@@ -2,7 +2,7 @@
 
 **Tracks XP, levels, and level thresholds per user + activity.** · Port **8082**
 
-The gamification engine. When a user logs an activity, activity-service publishes an `ActivityLogged` event to RabbitMQ instead of calling this service directly (issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)); this service consumes it **idempotently**, accumulates XP, recomputes the user's level for that activity against configurable thresholds, and keeps an append-only history of every change. It is a **leaf** service for outbound calls — it has no Feign clients and calls no other service — but it is now also a RabbitMQ **consumer**. Full design: [`EVENT_DRIVEN_DECOUPLING.md`](../EVENT_DRIVEN_DECOUPLING.md).
+The gamification engine. When a user logs an activity, activity-service publishes an `ActivityLogged` event to RabbitMQ instead of calling this service directly (issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)); this service consumes it **idempotently**, accumulates XP, recomputes the user's level for that activity against configurable thresholds, and keeps an append-only history of every change. It is a **leaf** service for outbound calls — it has no Feign clients and calls no other service — but it is now also a RabbitMQ **consumer**. Full design: [`EVENT_DRIVEN_DECOUPLING.md`](../docs/features/event-driven-decoupling.md).
 
 ## Role in the system
 
@@ -147,7 +147,7 @@ All in one `@Transactional` method — no retry loop.
 
 ## Key internal flow — `ActivityLoggedListener.onActivityLogged()`
 
-The idempotent RabbitMQ consumer (new in #16 — full design: [`EVENT_DRIVEN_DECOUPLING.md`](../EVENT_DRIVEN_DECOUPLING.md)):
+The idempotent RabbitMQ consumer (new in #16 — full design: [`EVENT_DRIVEN_DECOUPLING.md`](../docs/features/event-driven-decoupling.md)):
 
 1. `@RabbitListener(queues = "${messaging.queue}")` receives an `ActivityLoggedEvent(logId, userId, activityId, xpEarned)`.
 2. **Dedup check:** `processedEventRepository.existsById(logId)` — if already processed, log and return (no-op).
@@ -209,4 +209,4 @@ Covered by `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (incl
 
 ## Related docs
 
-- [Root README](../README.md) · [API.md](../API.md) · [activity-service README](../activity-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../EVENT_DRIVEN_DECOUPLING.md)
+- [Root README](../README.md) · [API.md](../API.md) · [activity-service README](../activity-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../docs/features/event-driven-decoupling.md)
