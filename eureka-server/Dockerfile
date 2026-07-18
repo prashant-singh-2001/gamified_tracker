@@ -1,12 +1,15 @@
 # build stage
 FROM maven:3.9-eclipse-temurin-17-alpine AS  builder
 WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline
-COPY src ./src
-RUN mvn clean package -DskipTests
 
-RUN java -Djarmode=layertools -jar target/*.jar extract
+COPY pom.xml .
+COPY eureka-server/pom.xml eureka-server/pom.xml
+RUN mvn -f eureka-server -am dependency:go-offline
+
+COPY eureka-server/src eureka-server/src
+RUN mvn -f eureka-server -am clean package -DskipTests
+
+RUN java -Djarmode=layertools -jar eureka-server/target/*.jar extract
 
 # run stage
 FROM eclipse-temurin:17-jre-alpine

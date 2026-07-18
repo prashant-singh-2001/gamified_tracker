@@ -33,7 +33,9 @@ services:
       start_period: 20s
 
   eureka-server:
-    build: ./eureka-server
+    build:
+      context: .
+      dockerfile: eureka-server/Dockerfile
     container_name: eureka-server
     ports:
       - "8761:8761"
@@ -123,7 +125,9 @@ services:
       start_period: 30s
 
   gateway:
-    build: ./api-gateway
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
     container_name: tracker-gateway
     ports:
       - "8080:8080"
@@ -145,7 +149,9 @@ services:
       start_period: 40s
 
   activity:
-    build: ./activity-service
+    build:
+      context: .
+      dockerfile: activity-service/Dockerfile
     container_name: tracker-activity
     ports:
       - "8081:8081"
@@ -167,7 +173,9 @@ services:
       start_period: 40s
 
   gamification:
-    build: ./gamification-service
+    build:
+      context: .
+      dockerfile: gamification-service/Dockerfile
     container_name: tracker-gamification
     ports:
       - "8082:8082"
