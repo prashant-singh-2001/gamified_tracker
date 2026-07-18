@@ -166,6 +166,39 @@ public class ActivityLogServiceImplTest {
     }
 
     @Test
+    @DisplayName("xpEarned uses the Category base multiplier when the activity has no per-activity override (#10)")
+    void addActivityLog_usesCategoryDefaultWhenNoOverride() {
+        LocalDateTime now = LocalDateTime.now();
+        Long userId = 2L;
+        ActivityLogRequest request = new ActivityLogRequest("Read", now, now.plusMinutes(30), "nice", now);
+        // xpMultiplier 0.0 == "no override" -> falls back to Category.STUDY base (1.5)
+        Activity activity = Activity.builder().id(7L).name("Read").category(Category.STUDY).xpMultiplier(0.0).active(true).createdAt(now).build();
+        stubActivityAndSave(activity, 100L);
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(userId, request).getBody();
+
+        assertNotNull(body);
+        // Deterministic despite the random bonus: reconstruct from the returned bonusMultiplier.
+        assertEquals(body.durationMinutes() * 1.5 * body.bonusMultiplier(), body.xpEarned(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("xpEarned uses the per-activity multiplier when one is set, ignoring the Category base (#10)")
+    void addActivityLog_usesOverrideWhenPresent() {
+        LocalDateTime now = LocalDateTime.now();
+        Long userId = 2L;
+        ActivityLogRequest request = new ActivityLogRequest("Read", now, now.plusMinutes(30), "nice", now);
+        // explicit override 3.0 wins over Category.STUDY base (1.5)
+        Activity activity = Activity.builder().id(7L).name("Read").category(Category.STUDY).xpMultiplier(3.0).active(true).createdAt(now).build();
+        stubActivityAndSave(activity, 100L);
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(userId, request).getBody();
+
+        assertNotNull(body);
+        assertEquals(body.durationMinutes() * 3.0 * body.bonusMultiplier(), body.xpEarned(), 1e-9);
+    }
+
+    @Test
     @DisplayName("addActivityLogResponseResponseEntity throws when activity not found (no outbox row written)")
     void testAddActivityLogResponseResponseEntityActivityMissing() {
         LocalDateTime now = LocalDateTime.now();

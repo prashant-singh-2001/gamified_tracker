@@ -59,12 +59,12 @@ Request — `ActivityRequestRecord`:
 |-------|------|-------|
 | `name` | String | should be unique (DB constraint) |
 | `category` | enum | `STUDY` \| `WORK` \| `GAMING` \| `CHORES` \| `HEALTH` \| `OTHER` |
-| `xpMultiplier` | double | e.g. `1.5` |
+| `xpMultiplier` | double | **optional override** — `≤ 0` or omitted falls back to the `Category` base (see [XP multiplier resolution](#xp-multiplier-resolution-issue-10)); a positive value overrides it. e.g. `1.5` |
 | `active` | boolean | soft enable/disable |
 | `description` | String | optional |
 | `createdAt` | ISO-8601 | **ignored** — server sets current time |
 
-Response `200 OK` — `ActivityResponseRecord` (`name`, `category`, `xpMultiplier`, `active`, `description`, `createdAt`).
+Response `200 OK` — `ActivityResponseRecord` (`name`, `category`, `xpMultiplier`, `active`, `description`, `createdAt`). The `xpMultiplier` returned is the **effective** value (override, or resolved category base), never a misleading `0.0`.
 
 ### Activity Logs — `/activitylog`
 
@@ -113,7 +113,7 @@ All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 | `id` | bigint | PK |
 | `name` | String | unique |
 | `category` | enum (STRING) | `Category` |
-| `xp_multiplier` | double | |
+| `xp_multiplier` | double | per-activity override; `≤ 0` means "no override, use the category base" (see [XP multiplier resolution](#xp-multiplier-resolution-issue-10)) |
 | `active` | boolean | soft-delete flag |
 | `description` | String | |
 | `created_at` | timestamp | |
@@ -130,7 +130,20 @@ All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 | `notes` | String | |
 | `created_at` | timestamp | |
 
-`Category` enum: `STUDY, WORK, GAMING, CHORES, HEALTH, OTHER` — also carries a `baseXpMultiplier()` switch expression.
+`Category` enum: `STUDY, WORK, GAMING, CHORES, HEALTH, OTHER` — also carries a `baseXpMultiplier()` switch expression (`STUDY`/`WORK` 1.5, `HEALTH` 1.3, `OTHER` 1.0, `CHORES` 0.8, `GAMING` 0.5), which is the default when an activity has no per-activity `xpMultiplier` override.
+
+### XP multiplier resolution (issue #10)
+
+`Activity.effectiveXpMultiplier()` is the single source of truth for the multiplier used in XP math:
+
+- If the activity's stored `xpMultiplier > 0`, that per-activity value is the **override** and wins.
+- Otherwise (`≤ 0`, including the `0.0` a client gets by omitting the field), it falls back to
+  `category.baseXpMultiplier()` — or `OTHER` (1.0) if the category is somehow null.
+
+Resolution happens **at log time** (in `ActivityLogServiceImpl`), not at create time, so an activity
+with no override always tracks its category's current base. This also closes the latent bug where an
+activity created without a multiplier earned `0` XP forever, and makes a negative multiplier degrade
+to the category base instead of producing negative XP.
 
 **`outbox_event`** — Transactional Outbox table (new in #16):
 | Column | Type | Notes |
@@ -150,7 +163,7 @@ Now `@Transactional` (fixes [issue #4](https://github.com/prashant-singh-2001/ga
 
 1. Resolve the `Activity` by name (`404` if missing) and build the `ActivityLog`, with `userId` taken from the `userId` request header (not the request body).
 2. `durationMinutes = Duration.between(startTime, endTime).toMinutes()`.
-3. **XP bonus roll:** `ThreadLocalRandom.current()` — 20% chance of a `1.1–1.5×` bonus, else `1.0×`. `xpEarned = durationMinutes × activity.xpMultiplier × bonus`. `bonusApplied`/`bonusMultiplier` are captured from this roll for the response.
+3. **XP bonus roll:** `ThreadLocalRandom.current()` — 20% chance of a `1.1–1.5×` bonus, else `1.0×`. `xpEarned = durationMinutes × activity.effectiveXpMultiplier() × bonus` — the effective multiplier is the per-activity override or the category base ([issue #10](https://github.com/prashant-singh-2001/gamified_tracker/issues/10); see [XP multiplier resolution](#xp-multiplier-resolution-issue-10)). `bonusApplied`/`bonusMultiplier` are captured from this roll for the response.
 4. **Save the `ActivityLog` FIRST** — the generated id becomes the event's `logId` / the outbox row's `idempotency_key`.
 5. **Same transaction:** build an `ActivityLoggedEvent(logId, userId, activityId, xpEarned)`, serialize it to JSON, and save an `OutboxEvent` row (`published_at: null`). No Feign call, no synchronous dependency on gamification-service being up.
 6. Return `ActivityLogResponse` with real `bonusApplied`/`bonusMultiplier`, but **`leveledUp` is always `false`** — it's now eventual (see `outbox/OutboxRelay.java` + gamification-service's `ActivityLoggedListener` for how it eventually gets applied).

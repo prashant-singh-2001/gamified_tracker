@@ -156,7 +156,7 @@ block is commented out in `application.yaml` to avoid registering duplicate, un-
 
 Redis-backed request throttling via the Server MVC gateway's **Bucket4j** `rateLimit()` filter
 (`config/RateLimitConfig.java` wires a Lettuce `AsyncProxyManager<String>` over Redis; the two
-proxied routes carry the filter). See [`RATE_LIMITING.md`](../RATE_LIMITING.md) for the full design.
+proxied routes carry the filter). See [`docs/features/rate-limiting.md`](../docs/features/rate-limiting.md) for the full design.
 
 - **Key:** the trusted `userId` header (injected by `JwtFilter`), falling back to client IP —
   `config/RateLimitKeyResolver.byUserIdOrIp()`. One user hitting their limit never throttles another.

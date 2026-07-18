@@ -96,7 +96,7 @@ List all activities. Requires auth (any role).
 |---|---|
 | `name` | String |
 | `category` | enum: `STUDY`, `WORK`, `GAMING`, `CHORES`, `HEALTH`, `OTHER` |
-| `xpMultiplier` | double |
+| `xpMultiplier` | double — the **effective** multiplier (per-activity override, else the category base) |
 | `active` | boolean |
 | `description` | String |
 | `createdAt` | ISO-8601 datetime string |
@@ -119,12 +119,12 @@ Create an activity. **Requires `ADMIN` role** — a non-admin token gets `403`.
 |---|---|---|
 | `name` | String | should be unique (enforced at the DB level) |
 | `category` | enum: `STUDY`\|`WORK`\|`GAMING`\|`CHORES`\|`HEALTH`\|`OTHER` | |
-| `xpMultiplier` | double | e.g. `1.5` for Study |
+| `xpMultiplier` | double | **optional per-activity override.** `≤ 0` or omitted → the activity's `Category` base multiplier applies (`STUDY`/`WORK` 1.5, `HEALTH` 1.3, `OTHER` 1.0, `CHORES` 0.8, `GAMING` 0.5). A positive value overrides that base. e.g. `1.5` |
 | `active` | boolean | |
 | `description` | String | optional |
 | `createdAt` | ISO-8601 datetime string | accepted but **ignored** — the server always sets `createdAt` to the current time |
 
-**Response:** `200 OK`, same shape as `GET /api/activity/{name}`.
+**Response:** `200 OK`, same shape as `GET /api/activity/{name}`. Note `xpMultiplier` in the response is the **effective** multiplier (the override, or the resolved category base when none was set) — so an activity created without an explicit multiplier reports its category base rather than `0.0`.
 
 ---
 
@@ -160,7 +160,7 @@ Records an activity session and computes XP (with a chance of a bonus roll). Req
 | `startTime` | ISO-8601 datetime string | |
 | `endTime` | ISO-8601 datetime string | |
 | `durationMinutes` | Long | computed: `endTime - startTime` |
-| `xpEarned` | double | computed: `durationMinutes × activity.xpMultiplier × bonus`. `bonus` is `1.0` normally, or a random value in `[1.1, 1.5)` on a ~20% chance roll |
+| `xpEarned` | double | computed: `durationMinutes × effectiveMultiplier × bonus`, where `effectiveMultiplier` is the activity's per-activity `xpMultiplier` when set (`> 0`), otherwise its `Category` base multiplier (#10). `bonus` is `1.0` normally, or a random value in `[1.1, 1.5)` on a ~20% chance roll |
 | `notes` | String | |
 | `createdAt` | ISO-8601 datetime string | |
 | `bonusApplied` | boolean | `true` if the ~20% bonus roll succeeded for this session |

@@ -112,6 +112,7 @@ See **[API.md](API.md)** for the full endpoint reference — the Gateway also ro
 ## Documentation
 
 - **[API.md](API.md)** — all REST endpoints and their request/response shapes
+- **[docs/features/](docs/features/)** — deep-dives into the notable engineering work (JWT/IDOR, rate limiting, event-driven decoupling, concurrency-safe XP, and more), each with a diagram and the load-bearing code
 - **[postman/](postman/)** — a ready-to-import Postman collection covering every endpoint, including a dedicated IDOR-verification folder
 - Per-service READMEs: [eureka-server](eureka-server/README.md) · [api-gateway](api-gateway/README.md) · [activity-service](activity-service/README.md) · [gamification-service](gamification-service/README.md)
 

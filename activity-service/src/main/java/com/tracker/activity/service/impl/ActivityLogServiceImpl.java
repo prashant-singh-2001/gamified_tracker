@@ -53,7 +53,8 @@ public class ActivityLogServiceImpl implements ActivityLogService {
         // ThreadLocalRandom avoids the pre-existing RandomGenerator.getDefault() "L32X64MixRandom"
         // failure (bug #2) that 500s this endpoint on some JVM/container images.
         var random = ThreadLocalRandom.current();
-        double multiplier = activityLog.getActivity().getXpMultiplier();
+        // Source of truth (#10): per-activity override when set (> 0), else the Category base.
+        double multiplier = activityLog.getActivity().effectiveXpMultiplier();
         double bonus = random.nextDouble() < 0.2 ? random.nextDouble(1.1, 1.5) : 1.0;
         activityLog.setXpEarned(activityLog.getDurationMinutes() * multiplier * bonus);
 

@@ -53,7 +53,9 @@ public class ActivityServiceImpl implements ActivityService {
         return new ActivityResponseRecord(
                 activity.getName(),
                 activity.getCategory(),
-                activity.getXpMultiplier(),
+                // Report the multiplier that will actually apply (#10): the per-activity override,
+                // or the Category base when there's no override — never a misleading 0.0.
+                activity.effectiveXpMultiplier(),
                 activity.isActive(),
                 activity.getDescription(),
                 activity.getCreatedAt()
