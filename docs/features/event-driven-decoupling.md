@@ -34,7 +34,7 @@ sequenceDiagram
     AS->>AS: compute duration, xpEarned, bonus roll
     AS->>DB1: INSERT activity_log (get generated logId)
     AS->>DB1: INSERT outbox_event (payload, published_at=NULL)
-    AS-->>C: 200 { bonusApplied/bonusMultiplier real; leveledUp: false }
+    AS-->>C: 200 bonusApplied, bonusMultiplier, leveledUp=false
 
     loop every outbox.relay.delay-ms (2000ms)
         OR->>DB1: SELECT top 100 WHERE published_at IS NULL ORDER BY created_at
@@ -58,7 +58,7 @@ sequenceDiagram
     end
 
     C->>AS: (later) GET /api/level/user/{id}
-    AS-->>C: real leveledUp / level / totalXp
+    AS-->>C: leveledUp, level, totalXp
 ```
 
 ### 1. Producer — save-then-outbox in one transaction (the actual bug fix)
