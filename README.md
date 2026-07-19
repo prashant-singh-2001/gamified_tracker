@@ -122,3 +122,30 @@ Open issues are labelled by priority and type. New to the project? Start with a
 [**good first issue**](https://github.com/prashant-singh-2001/gamified_tracker/contribute).
 
 Workflow: pick an issue → branch → open a PR that references it (`Fixes #<n>`).
+
+### Pull Request Validation Workflow
+
+This repository uses **GitHub Actions** to validate Pull Requests before they are merged into `main`.
+
+1. Fork this repository.
+2. Clone your fork and create a feature branch.
+
+   ```bash
+   git checkout -b feature/my-feature
+   ```
+
+3. Implement your changes and push the branch to your fork.
+
+4. Open a Pull Request from your feature branch to the `main` branch.
+
+5. Navigate to the **Actions** tab of **your fork**.
+
+6. Select the **PR Validation** workflow.
+
+7. Click **Run workflow**.
+
+8. In the branch dropdown, select the same branch used to create the PR (e.g. `feature/my-feature`).
+
+9. Click **Run workflow**.
+
+Once the workflow completes successfully, the PR is ready for review and merge (subject to the repository's branch protection rules).
