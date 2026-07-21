@@ -28,11 +28,20 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
+    # data.sql normally runs before Hibernate creates the schema; deferring it lets
+    # ddl-auto finish first so the achievement table exists when the seed inserts run.
+    defer-datasource-initialization: true
     show-sql: true
     properties:
       hibernate:
         format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  sql:
+    init:
+      # Boot only auto-runs schema/data scripts for embedded databases by default;
+      # this datasource is Postgres, so data.sql needs to be opted in explicitly.
+      mode: always
 
   jackson:
     serialization:

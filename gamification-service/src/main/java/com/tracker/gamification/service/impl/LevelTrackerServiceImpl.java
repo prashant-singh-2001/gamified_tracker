@@ -99,6 +99,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         Integer oldLevel = tracker.getLevel();
 
         tracker.setTotalXp(tracker.getTotalXp() + dto.xp());
+        tracker.setLogCount(tracker.getLogCount() + 1);
         boolean leveledUp = applyLevel(tracker);
 
         var saved = levelTrackerRepository.save(tracker);
