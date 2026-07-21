@@ -6,10 +6,7 @@ import com.tracker.gamification.dao.LevelUpEvent;
 import com.tracker.gamification.domain.LevelOutcome;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
-import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
-import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
-import com.tracker.gamification.repository.LevelTrackerRepository;
-import com.tracker.gamification.repository.LevelUpEventRepository;
+import com.tracker.gamification.repository.*;
 import com.tracker.gamification.service.LevelTrackerService;
 import lombok.AllArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -29,6 +26,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final ActivityLevelThresholdRepository activityLevelThresholdRepository;
     private final LevelTrackerArchiveRepository levelTrackerArchiveRepository;
     private final LevelUpEventRepository levelUpEventRepository;
+    private final OverallLevelThresholdRepository overallLevelThresholdRepository;
 
     @Override
     public List<LevelTrackerDto> findByUserId(Long userId) {
@@ -172,6 +170,10 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
                 entity.getCurrentLevelXp(),
                 leveledUp
         );
+    }
+
+    int overallLevelFor(double Xp) {
+        return overallLevelThresholdRepository.findReachedLevel(Xp, PageRequest.of(0, 1)).orElseThrow(() -> new NoSuchElementException("XP out of range"));
     }
 
     private LevelTrackerDto mapToDto(LevelTracker entity) {
