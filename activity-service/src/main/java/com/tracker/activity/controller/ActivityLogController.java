@@ -4,6 +4,7 @@ import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.service.ActivityLogService;
 
+import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 
 import org.springframework.http.ResponseEntity;
@@ -26,7 +27,7 @@ public class ActivityLogController {
     }
 
     @PostMapping("/")
-    public ResponseEntity<ActivityLogResponse> addActivityLog(@RequestHeader("userId") Long userId, @RequestBody ActivityLogRequest activityLogRequest) {
+    public ResponseEntity<ActivityLogResponse> addActivityLog(@RequestHeader("userId") Long userId, @Valid @RequestBody ActivityLogRequest activityLogRequest) {
         return activityLogService.addActivityLogResponseResponseEntity(userId, activityLogRequest);
     }
 

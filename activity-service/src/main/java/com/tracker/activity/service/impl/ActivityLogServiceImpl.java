@@ -1,10 +1,12 @@
 package com.tracker.activity.service.impl;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.exception.ActivityNotFoundException;
+import com.tracker.activity.exception.InvalidTimeRangeException;
 import com.tracker.activity.messaging.ActivityLoggedEvent;
 import com.tracker.activity.outbox.OutboxEvent;
 import com.tracker.activity.outbox.OutboxEventRepository;
@@ -45,6 +47,11 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     public ResponseEntity<ActivityLogResponse> addActivityLogResponseResponseEntity(
             Long userId, ActivityLogRequest activityLogRequest) {
 
+        // fail fast on bad input before it can produce a negative duration / negative XP
+        if (!activityLogRequest.endTime().isAfter(activityLogRequest.startTime())) {
+            throw new InvalidTimeRangeException("endTime must be after startTime");
+        }
+
         var activityLog = mapToActivityLog(userId, activityLogRequest);
         activityLog.setDurationMinutes(
                 Duration.between(activityLog.getStartTime(), activityLog.getEndTime()).toMinutes());
@@ -83,7 +90,7 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     private String toJson(ActivityLoggedEvent event) {
         try {
             return objectMapper.writeValueAsString(event);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+        } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize ActivityLoggedEvent", e);
         }
     }

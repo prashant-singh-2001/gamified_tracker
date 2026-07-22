@@ -1,0 +1,29 @@
+# IDE / VCS
+.idea/
+.git/
+.gitignore
+.gitattributes
+
+# Build outputs (every service's target dir)
+**/target/
+
+# Maven wrapper internals (not needed; image installs its own maven)
+**/.mvn/
+**/mvnw
+**/mvnw.cmd
+
+# Env files (never bake secrets into the image; passed at runtime via env_file)
+.env
+.env.example
+
+# Docs / misc, not needed inside the image
+*.md
+*.pdf
+README.md
+API.md
+
+# Compose / infra config not needed inside app images
+docker-compose.yml
+prometheus.yml
+grafana/
+postman/

@@ -1,12 +1,15 @@
 # build stage
 FROM maven:3.9-eclipse-temurin-17-alpine AS  builder
 WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline
-COPY src ./src
-RUN mvn clean package -DskipTests
 
-RUN java -Djarmode=layertools -jar target/*.jar extract
+COPY pom.xml .
+COPY api-gateway/pom.xml api-gateway/pom.xml
+RUN mvn -f api-gateway -am dependency:go-offline
+
+COPY api-gateway/src api-gateway/src
+RUN mvn -f api-gateway -am clean package -DskipTests
+
+RUN java -Djarmode=layertools -jar api-gateway/target/*.jar extract
 
 # run stage
 FROM eclipse-temurin:17-jre-alpine

@@ -1,12 +1,18 @@
 # build stage
 FROM maven:3.9-eclipse-temurin-17-alpine AS  builder
 WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline
-COPY src ./src
-RUN mvn clean package -DskipTests
 
-RUN java -Djarmode=layertools -jar target/*.jar extract
+# copy root parent POM + this service's POM first (Docker layer caching:
+# dependency resolution only reruns if a pom.xml actually changes)
+COPY pom.xml .
+COPY activity-service/pom.xml activity-service/pom.xml
+RUN mvn -f activity-service/pom.xml dependency:go-offline
+
+# now copy source and build
+COPY activity-service/src activity-service/src
+RUN mvn -f activity-service/pom.xml clean package -DskipTests
+
+RUN java -Djarmode=layertools -jar activity-service/target/*.jar extract
 
 # run stage
 FROM eclipse-temurin:17-jre-alpine

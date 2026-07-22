@@ -7,6 +7,7 @@ import com.tracker.activity.dao.Category;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.exception.ActivityNotFoundException;
+import com.tracker.activity.exception.InvalidTimeRangeException;
 import com.tracker.activity.messaging.ActivityLoggedEvent;
 import com.tracker.activity.outbox.OutboxEvent;
 import com.tracker.activity.outbox.OutboxEventRepository;
@@ -209,6 +210,34 @@ public class ActivityLogServiceImplTest {
         assertThrows(ActivityNotFoundException.class,
                 () -> activityLogService.addActivityLogResponseResponseEntity(2L, request));
 
+        verifyNoInteractions(outboxEventRepository);
+    }
+
+    @Test
+    @DisplayName("addActivityLogResponseResponseEntity throws InvalidTimeRangeException when endTime is before startTime (no log or outbox row written)")
+    void testAddActivityLogResponseResponseEntityEndTimeBeforeStartTime() {
+        LocalDateTime now = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Run", now, now.minusMinutes(10), "notes", now);
+
+        InvalidTimeRangeException ex = assertThrows(InvalidTimeRangeException.class,
+                () -> activityLogService.addActivityLogResponseResponseEntity(2L, request));
+
+        assertTrue(ex.getMessage().contains("endTime"));
+        verifyNoInteractions(activityRepository);
+        verifyNoInteractions(activityLogRepository);
+        verifyNoInteractions(outboxEventRepository);
+    }
+
+    @Test
+    @DisplayName("addActivityLogResponseResponseEntity throws InvalidTimeRangeException when endTime equals startTime (zero duration is rejected)")
+    void testAddActivityLogResponseResponseEntityEndTimeEqualsStartTime() {
+        LocalDateTime now = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Run", now, now, "notes", now);
+
+        assertThrows(InvalidTimeRangeException.class,
+                () -> activityLogService.addActivityLogResponseResponseEntity(2L, request));
+
+        verifyNoInteractions(activityLogRepository);
         verifyNoInteractions(outboxEventRepository);
     }
 

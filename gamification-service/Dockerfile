@@ -1,12 +1,16 @@
 # build stage
 FROM maven:3.9-eclipse-temurin-17-alpine AS  builder
 WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline
-COPY src ./src
-RUN mvn clean package -DskipTests
 
-RUN java -Djarmode=layertools -jar target/*.jar extract
+COPY pom.xml .
+COPY gamification-service/pom.xml gamification-service/pom.xml
+RUN mvn -f gamification-service/pom.xml dependency:go-offline
+
+COPY gamification-service/src gamification-service/src
+
+RUN mvn -f gamification-service/pom.xml clean package -DskipTests
+
+RUN java -Djarmode=layertools -jar gamification-service/target/*.jar extract
 
 # run stage
 FROM eclipse-temurin:17-jre-alpine
