@@ -70,4 +70,14 @@ public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long
             ) ahead
             """, nativeQuery = true)
     long countUsersAhead(@Param("xp") double xp);
+
+    
+    @Query(value = """
+            SELECT l.userId AS userId, 
+            SUM(l.totalXp) AS totalXp 
+            FROM LevelTracker l 
+            GROUP BY l.userId 
+            ORDER BY SUM(l.totalXp) DESC
+            """)
+    List<UserXpProjection> findAllUserTotals();
 }

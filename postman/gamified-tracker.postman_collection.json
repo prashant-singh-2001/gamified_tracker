@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Gamified Tracker API",
-    "description": "Covers the API Gateway's public surface (port 8080), plus direct-hit folders for Activity Service (8081) and Gamification Service (8082) for internal debugging, per API.md. Includes a dedicated 'Security - IDOR Verification' folder exercising the userId-from-JWT fix (spoofed header neutralization, intentionally-open reads).\n\nRun order matters: use Collection Runner top-to-bottom (Auth -> Activity -> Activity Log -> Level Tracker -> Activity Level Threshold -> Security -> Misc -> Rate Limiting -> internal-service folders). The 'Rate Limiting' folder self-loops a single request (via setNextRequest) to trip the Gateway's 429, so it only behaves correctly under the Collection Runner, not a manual single Send. Test data (emails, activity name, a synthetic activityId) is generated once per run by the collection-level pre-request script and cached in collection variables, so re-running the whole collection produces fresh, non-colliding data each time.\n\nPrerequisites: `docker-compose up --build` (or the equivalent Maven/local run) so the Gateway (8080), Activity Service (8081), Gamification Service (8082), and Eureka are all up.\n\nKnown caveats baked into these tests:\n- `POST /api/activitylog` (and its internal-service equivalent) can 500 due to a pre-existing, unrelated bug in `ActivityLogServiceImpl`'s XP-bonus roll (`RandomGenerator.getDefault()` failing to find the `L32X64MixRandom` algorithm provider in some JVM/container images). If that request fails, downstream requests that depend on its output (`activityLogId`) are guarded to report a skip rather than crash the run.\n- No-token requests currently return `403`, not the semantically-expected `401` (default Spring Security behavior with no custom `AuthenticationEntryPoint`) - tests accept either.\n- `GET /level/{id}` and `GET /activitylog/{id}` reads are intentionally open to any authenticated user (a social/leaderboard feature, not an access-control gap) - tests assert `200`, not `403`, when a different user reads them.",
+    "description": "Covers the API Gateway's public surface (port 8080), plus direct-hit folders for Activity Service (8081) and Gamification Service (8082) for internal debugging, per API.md. Includes a dedicated 'Security - IDOR Verification' folder exercising the userId-from-JWT fix (spoofed header neutralization, intentionally-open reads).\n\nRun order matters: use Collection Runner top-to-bottom (Auth -> Activity -> Activity Log -> Level Tracker -> Ranks -> Activity Level Threshold -> Security -> Misc -> Rate Limiting -> internal-service folders). The 'Ranks' folder depends on 'Level Tracker' having logged XP for User A earlier in the same run. The 'Rate Limiting' folder self-loops a single request (via setNextRequest) to trip the Gateway's 429, so it only behaves correctly under the Collection Runner, not a manual single Send. Test data (emails, activity name, a synthetic activityId) is generated once per run by the collection-level pre-request script and cached in collection variables, so re-running the whole collection produces fresh, non-colliding data each time.\n\nPrerequisites: `docker-compose up --build` (or the equivalent Maven/local run) so the Gateway (8080), Activity Service (8081), Gamification Service (8082), and Eureka are all up.\n\nKnown caveats baked into these tests:\n- `POST /api/activitylog` (and its internal-service equivalent) can 500 due to a pre-existing, unrelated bug in `ActivityLogServiceImpl`'s XP-bonus roll (`RandomGenerator.getDefault()` failing to find the `L32X64MixRandom` algorithm provider in some JVM/container images). If that request fails, downstream requests that depend on its output (`activityLogId`) are guarded to report a skip rather than crash the run.\n- No-token requests currently return `403`, not the semantically-expected `401` (default Spring Security behavior with no custom `AuthenticationEntryPoint`) - tests accept either.\n- `GET /level/{id}` and `GET /activitylog/{id}` reads are intentionally open to any authenticated user (a social/leaderboard feature, not an access-control gap) - tests assert `200`, not `403`, when a different user reads them.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -41,7 +41,8 @@
     { "key": "activityName", "value": "", "type": "string" },
     { "key": "activityLogId", "value": "", "type": "string" },
     { "key": "thresholdActivityId", "value": "1", "type": "string" },
-    { "key": "rlAttempts", "value": "0", "type": "string" }
+    { "key": "rlAttempts", "value": "0", "type": "string" },
+    { "key": "userATier", "value": "", "type": "string" }
   ],
   "item": [
     {
@@ -733,6 +734,203 @@
                 "exec": [
                   "pm.test('Status is 400', function () {",
                   "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ranks",
+      "description": "Exercises the overall-level + percentile-rank system (/api/ranks/**). Depends on the 'Level Tracker' folder running first in the same collection run, so User A has XP on record before recompute is triggered. Rank tiers are relative/percentile-based across ALL users ever tracked in this database, so exact tier/percentile values are not asserted here - only response shape and internal consistency (e.g. distribution counts, tier membership).",
+      "item": [
+        {
+          "name": "Get My Rank - Not Yet Ranked (404)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/ranks/me", "host": ["{{gatewayUrl}}"], "path": ["api", "ranks", "me"] },
+            "description": "User A was just registered this run and has never been through a recompute, so no UserRank snapshot exists yet for this specific userId."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404 (no snapshot until the first recompute)', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trigger Recompute",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/ranks/recompute", "host": ["{{gatewayUrl}}"], "path": ["api", "ranks", "recompute"] },
+            "description": "Not admin-gated in the current SecurityConfig - any authenticated user can trigger it. Re-ranks every user with LevelTracker rows; normally runs on a schedule (ranking.recompute-interval-ms), this is the on-demand equivalent for testing/demos."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('rankedUsers is at least 1 (User A has logged XP earlier in this run)', function () {",
+                  "    pm.expect(json.rankedUsers).to.be.at.least(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get My Rank (User A)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/ranks/me", "host": ["{{gatewayUrl}}"], "path": ["api", "ranks", "me"] },
+            "description": "After the recompute, User A has a snapshot. Captures the assigned tier into a collection variable for the leaderboard requests below."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "var validTiers = ['SUMMIT', 'PEAK', 'RIDGE', 'ALPINE', 'ASCENT', 'HIGHLAND', 'FOOTHILL', 'TRAILHEAD', 'BASECAMP'];",
+                  "pm.test('tier is one of the 9 Summit ladder tiers', function () {",
+                  "    pm.expect(validTiers).to.include(json.tier);",
+                  "});",
+                  "pm.test('overallLevel is at least 1', function () {",
+                  "    pm.expect(json.overallLevel).to.be.at.least(1);",
+                  "});",
+                  "pm.test('position is at least 1', function () {",
+                  "    pm.expect(json.position).to.be.at.least(1);",
+                  "});",
+                  "pm.test('totalUsers is at least position (position cannot exceed the population size)', function () {",
+                  "    pm.expect(json.totalUsers).to.be.at.least(json.position);",
+                  "});",
+                  "pm.collectionVariables.set('userATier', json.tier);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get My Tier Leaderboard (User A)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/ranks/me/leaderboard",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "ranks", "me", "leaderboard"]
+            },
+            "description": "Resolves User A's own tier server-side and returns that tier's leaderboard - User A must appear in it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "pm.test('User A appears in their own tier leaderboard', function () {",
+                  "    var userIds = json.map(function (m) { return String(m.userId); });",
+                  "    pm.expect(userIds).to.include(pm.collectionVariables.get('userAId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Tier Leaderboard By Name",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/ranks/{{userATier}}/leaderboard?page=0&size=20",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "ranks", "{{userATier}}", "leaderboard"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            },
+            "description": "Same tier as the previous request, addressed directly by name (as any client would to browse a specific tier) rather than resolved from the caller's own rank."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is a non-empty array', function () {",
+                  "    pm.expect(json).to.be.an('array');",
+                  "    pm.expect(json.length).to.be.above(0);",
+                  "});",
+                  "pm.test('Every entry reports the requested tier', function () {",
+                  "    var tiers = json.map(function (m) { return m.tier; });",
+                  "    pm.expect(tiers.every(function (t) { return t === pm.collectionVariables.get('userATier'); })).to.be.true;",
+                  "});",
+                  "pm.test('withinRankPosition is 1-based and starts at 1 on the first page', function () {",
+                  "    pm.expect(json[0].withinRankPosition).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Rank Distribution",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/ranks", "host": ["{{gatewayUrl}}"], "path": ["api", "ranks"] },
+            "description": "One row per RankTier, including tiers with zero users - useful for a 'population by altitude' dashboard chart."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Exactly 9 tiers are reported', function () {",
+                  "    pm.expect(json.length).to.eql(9);",
+                  "});",
+                  "pm.test('User A\\'s tier has at least 1 user', function () {",
+                  "    var myTier = json.find(function (d) { return d.tier === pm.collectionVariables.get('userATier'); });",
+                  "    pm.expect(myTier.userCount).to.be.at.least(1);",
                   "});"
                 ]
               }

@@ -37,7 +37,7 @@ public class RouteConfiguration {
     public RouterFunction<ServerResponse> gamificationRoute(RateLimitProperties props) {
         var b = props.gamification();
         return route("gamification")
-                .route(path("/api/level/**").or(path("/api/threshold/**")).or(path("/api/leaderboard/**")).or(path("/api/notifications/**")), http())
+                .route(path("/api/level/**").or(path("/api/threshold/**")).or(path("/api/leaderboard/**")).or(path("/api/notifications/**")).or(path("/api/ranks/**")), http())
                 .before(stripPrefix(1))
                 .filter(lb("gamification-service"))
                 .filter(rateLimit(

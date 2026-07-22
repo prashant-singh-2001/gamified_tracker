@@ -109,3 +109,8 @@ messaging:
   queue: gamification.activity-logged.q
   dlx: activity.events.dlx
   dlq: gamification.activity-logged.dlq
+
+ranking:
+  # Cadence for RankRecomputeServiceImpl's scheduled re-rank; externalized so it can be
+  # tuned per environment (e.g. faster for local/demo) without a rebuild.
+  recompute-interval-ms: 300000

@@ -27,7 +27,7 @@ public class Achievement {
     private CriteriaType criteriaType;
 
     private Long threshold;
-
+    
     private Long activityId;
 
     private boolean active;

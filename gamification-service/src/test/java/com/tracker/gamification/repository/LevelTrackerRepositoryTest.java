@@ -318,5 +318,26 @@ public class LevelTrackerRepositoryTest {
         assertEquals(1, page1.size());
         assertEquals(100.0, page1.get(0).getTotalXp());
     }
+
+    @Test
+    void testFindAllUserTotals_groupsAndOrdersDescending() {
+        // Arrange — user 40 spans two activities (100 + 50 = 150 total); user 41 has one (300)
+        levelTrackerRepository.save(LevelTracker.builder()
+                .userId(40L).activityId(1L).level(1).totalXp(100.0).currentLevelXp(100.0).build());
+        levelTrackerRepository.save(LevelTracker.builder()
+                .userId(40L).activityId(2L).level(1).totalXp(50.0).currentLevelXp(50.0).build());
+        levelTrackerRepository.save(LevelTracker.builder()
+                .userId(41L).activityId(1L).level(2).totalXp(300.0).currentLevelXp(100.0).build());
+
+        // Act
+        List<UserXpProjection> totals = levelTrackerRepository.findAllUserTotals();
+
+        // Assert — user 41 (300) outranks user 40 (150 summed across activities)
+        assertEquals(2, totals.size());
+        assertEquals(41L, totals.get(0).getUserId());
+        assertEquals(300.0, totals.get(0).getTotalXp());
+        assertEquals(40L, totals.get(1).getUserId());
+        assertEquals(150.0, totals.get(1).getTotalXp());
+    }
 }
 
