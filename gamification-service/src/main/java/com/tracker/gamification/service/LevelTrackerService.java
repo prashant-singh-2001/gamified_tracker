@@ -17,6 +17,6 @@ public interface LevelTrackerService {
 
     // IDOR fix: userId now passed explicitly from the trusted header, not read off the DTO.
     // LevelTrackerDto save(LevelTrackerRequestDTO dto);
-
+    
     LevelTrackerDto save(Long userId, LevelTrackerRequestDTO dto);
 }

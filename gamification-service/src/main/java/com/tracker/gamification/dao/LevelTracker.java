@@ -25,4 +25,8 @@ public class LevelTracker {
     private Integer level;
     private double totalXp;
     private double currentLevelXp;
+
+    // Number of times XP has been logged for this (user, activity) pair — the source for
+    // achievement rules like ACTIVITIES_LOGGED, since totalXp alone can't be reversed into a count.
+    private int logCount;
 }
