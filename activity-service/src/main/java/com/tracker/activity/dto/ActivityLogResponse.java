@@ -3,6 +3,8 @@ package com.tracker.activity.dto;
 import java.time.LocalDateTime;
 
 import com.tracker.activity.dao.Activity;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 
 public record ActivityLogResponse(
         Long id,
