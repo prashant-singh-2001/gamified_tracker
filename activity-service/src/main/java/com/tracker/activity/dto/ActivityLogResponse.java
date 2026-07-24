@@ -1,6 +1,8 @@
 package com.tracker.activity.dto;
 
 import com.tracker.activity.dao.Activity;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDateTime;
 

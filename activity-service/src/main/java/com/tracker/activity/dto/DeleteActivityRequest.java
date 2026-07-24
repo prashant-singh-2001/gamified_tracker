@@ -1,4 +1,9 @@
 package com.tracker.activity.dto;
 
-public record DeleteActivityRequest(String name) {
+import jakarta.validation.constraints.NotBlank;
+
+public record DeleteActivityRequest(
+        @NotBlank(message = "name cannot be null")
+        String name
+) {
 }

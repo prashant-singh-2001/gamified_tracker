@@ -1,9 +1,7 @@
 package com.tracker.activity.dao;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.Id;
-import jakarta.persistence.ManyToOne;
+import jakarta.persistence.*;
+import jakarta.validation.constraints.NotNull;
 import lombok.*;
 
 import java.time.LocalDateTime;
@@ -14,6 +12,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 @Entity
+@Table(name = "activity_log")
 public class ActivityLog {
 
     @Id
@@ -25,7 +24,10 @@ public class ActivityLog {
     @ManyToOne
     private Activity activity;
 
+    @NotNull(message = "Start Time is required")
     private LocalDateTime startTime;
+
+    @NotNull(message = "End time is required")
     private LocalDateTime endTime;
 
     private Long durationMinutes;

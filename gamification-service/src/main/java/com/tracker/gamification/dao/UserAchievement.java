@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-@Table(name = "UserAchievement",
+@Table(name = "user_achievement",
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_user_achievement",
                 columnNames = {"user_id", "achievement_id"}))
