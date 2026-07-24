@@ -1,8 +1,8 @@
 package com.tracker.activity.dto;
 
-import java.time.LocalDateTime;
-
 import com.tracker.activity.dao.Activity;
+
+import java.time.LocalDateTime;
 
 public record ActivityLogResponse(
         Long id,
@@ -16,6 +16,8 @@ public record ActivityLogResponse(
         LocalDateTime createdAt,
         boolean bonusApplied,
         double bonusMultiplier,
-        boolean leveledUp
+        boolean leveledUp,
+        int currentStreak,
+        double streakMultiplier
 ) {
 }
