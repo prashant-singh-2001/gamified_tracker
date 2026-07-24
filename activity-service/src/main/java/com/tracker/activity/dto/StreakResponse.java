@@ -1,4 +1,6 @@
 package com.tracker.activity.dto;
 
-public record StreakResponse() {
+import java.time.LocalDate;
+
+public record StreakResponse(Long activityId, int currentStreak, int longestStreak, LocalDate lastActivityDate) {
 }

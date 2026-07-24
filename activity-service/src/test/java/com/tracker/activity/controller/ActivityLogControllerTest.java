@@ -58,7 +58,9 @@ public class ActivityLogControllerTest {
                 now,
                 false,
                 1.0,
-                false
+                false,
+                0,
+                1.0
         );
 
         //Act
@@ -116,7 +118,9 @@ public class ActivityLogControllerTest {
                 now,
                 false,
                 1.0,
-                false
+                false,
+                0,
+                1.0
         );
 
         //Act
@@ -179,7 +183,9 @@ public class ActivityLogControllerTest {
                 now,
                 false,
                 1.0,
-                false
+                false,
+                0,
+                1.0
         );
         ActivityLogResponse log2 = new ActivityLogResponse(
                 2L,
@@ -193,7 +199,9 @@ public class ActivityLogControllerTest {
                 now.plusHours(1),
                 false,
                 1.0,
-                false
+                false,
+                0,
+                1.0
         );
         ActivityLogResponse log3 = new ActivityLogResponse(
                 3L,
@@ -207,7 +215,9 @@ public class ActivityLogControllerTest {
                 now.plusHours(3),
                 false,
                 1.0,
-                false
+                false,
+                0,
+                1.0
         );
 
         //Act
