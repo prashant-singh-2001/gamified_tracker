@@ -30,6 +30,7 @@ public class Achievement {
     
     private Long activityId;
 
+    @Column(name = "is_active")
     private boolean active;
 
 }
