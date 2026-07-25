@@ -98,7 +98,7 @@ curl http://localhost:8080/api/level -H "Authorization: Bearer $TOKEN"          
 ```
 Both routes are reverse-proxied byte-for-byte — a downstream `404`'s `ProblemDetail` body, including
 its `instance` field showing the *downstream* path, passes through unchanged (see
-[`API.md` § Error Response Format](../../API.md#error-response-format)).
+[Error Handling](error-handling.md)).
 
 ## Related
 [Rate Limiting](rate-limiting.md) · [Authentication & Identity Propagation](authentication-and-identity.md) ·
