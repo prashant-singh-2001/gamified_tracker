@@ -157,5 +157,4 @@ The Postman collection has a **Rate Limiting** folder that self-loops one reques
 
 ## Related
 [Authentication & Identity Propagation](authentication-and-identity.md) (supplies the trusted key) ·
-[API Gateway Routing](api-gateway-routing.md) (where the filter attaches) ·
-[`api-gateway/README.md` § Rate limiting](../../api-gateway/README.md#rate-limiting)
+[API Gateway Routing](api-gateway-routing.md) (where the filter attaches)

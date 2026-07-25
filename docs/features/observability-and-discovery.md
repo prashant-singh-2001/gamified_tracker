@@ -135,4 +135,4 @@ docker-compose up --build                                 # watch the healthchec
 ## Related
 [API Gateway Routing](api-gateway-routing.md) (consumes Eureka for `lb://` resolution) ·
 [Event-Driven Decoupling](event-driven-decoupling.md) (RabbitMQ is the other compose healthcheck
-dependency) · [`API.md` § Health Checks](../../API.md#health-checks-actuator)
+dependency)

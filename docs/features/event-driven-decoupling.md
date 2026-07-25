@@ -211,5 +211,4 @@ messages queue in RabbitMQ and drain once the service comes back.
 
 ## Related
 [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md) (the method both callers converge on) ·
-[Level-Up Notifications](level-up-notifications.md) (where the eventual `leveledUp` surfaces) ·
-[`API.md`](../../API.md)
+[Level-Up Notifications](level-up-notifications.md) (where the eventual `leveledUp` surfaces)

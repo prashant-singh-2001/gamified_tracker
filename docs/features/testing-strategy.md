@@ -1,13 +1,13 @@
 # Testing Strategy — Sliced, Fast, Hermetic
 
-**Services:** all four · **27 test classes** · **Key techniques:** test slices (`@WebMvcTest`,
+**Services:** all four · **39 test classes** · **Key techniques:** test slices (`@WebMvcTest`,
 `@DataJpaTest`), Mockito unit tests, `InOrder`/`ArgumentCaptor`, H2 for the persistence layer,
 `@MockBean` to keep infra-dependent context tests hermetic
 
 ## What it is / why it's notable
 
 The suite is built the way a Spring test suite *should* be — as a pyramid of fast, focused slices
-rather than a pile of slow full-context integration tests. 27 test classes across the four modules,
+rather than a pile of slow full-context integration tests. 39 test classes across the four modules,
 each using the narrowest Spring test slice that still exercises the thing under test (or no Spring
 context at all, where a plain constructor call does the job). The interesting parts aren't the counts
 — they're the specific choices that keep the suite fast and deterministic: verifying **ordering** of
@@ -19,9 +19,9 @@ without Docker.
 
 | Slice | Count | What it tests | Example |
 |---|---|---|---|
-| Plain unit (`@ExtendWith(MockitoExtension.class)` or none) | 8 | Service/domain logic, mocks at the boundary | `LevelTrackerServiceImplTest`, `ActivityTest` |
-| `@DataJpaTest` (H2) | 6 | Repository queries against a real (in-memory) DB | `LevelTrackerRepositoryTest`, `OutboxEventRepositoryTest` |
-| `@WebMvcTest` (MockMvc) | 6 | Controller HTTP contract, JSON, status codes | `NotificationControllerTest`, `ActivityControllerTest` |
+| Plain unit (`@ExtendWith(MockitoExtension.class)` or none) | 18 | Service/domain logic, mocks at the boundary | `LevelTrackerServiceImplTest`, `AchievementServiceImplTest`, `RankTierTest` |
+| `@DataJpaTest` (H2) | 10 | Repository queries against a real (in-memory) DB | `LevelTrackerRepositoryTest`, `ActivityStreakRepositoryTest`, `UserRankRepositoryTest` |
+| `@WebMvcTest` (MockMvc) | 7 | Controller HTTP contract, JSON, status codes | `NotificationControllerTest`, `RankControllerTest` |
 | `@SpringBootTest` | 4 | One context-load smoke test per service | `ApiGatewayApplicationTests` |
 
 Each slice loads only the beans it needs — a `@WebMvcTest` doesn't spin up JPA or Redis, a

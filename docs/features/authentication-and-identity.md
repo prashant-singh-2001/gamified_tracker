@@ -127,7 +127,7 @@ Role gating happens at the **URL level**, not `@PreAuthorize` — because routin
 read `@RequestHeader("userId") Long userId` and trust it completely — because by the time a request
 reaches them, `JwtFilter` has already guaranteed that header can only carry the authenticated
 caller's real id. Hitting those services directly (bypassing the gateway) is the one way to defeat
-this — documented as a known caveat in `API.md`, not a gap in the fix itself.
+this — a documented, known caveat, not a gap in the fix itself.
 
 ## Config
 
@@ -156,6 +156,4 @@ The Postman collection's **Security – IDOR Verification** folder automates exa
 
 ## Related
 [Rate Limiting](rate-limiting.md) (keys on this same trusted `userId` header) ·
-[API Gateway Routing](api-gateway-routing.md) ·
-[`API.md` § Authentication](../../API.md#authentication) ·
-[`api-gateway/README.md` § Security model](../../api-gateway/README.md#security-model-the-centerpiece)
+[API Gateway Routing](api-gateway-routing.md)

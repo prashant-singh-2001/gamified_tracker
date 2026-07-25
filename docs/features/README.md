@@ -1,6 +1,6 @@
 # Feature Docs — Gamified Tracker
 
-Eleven standalone deep-dives into the notable engineering work in this codebase — each one covers
+Fourteen standalone deep-dives into the notable engineering work in this codebase — each one covers
 what the feature is, why it's worth a second look, how it actually works (with a diagram and the
 load-bearing code), its config, and a way to try it live. Verified against the current source at
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
@@ -28,12 +28,20 @@ territory.
 | [Leveling Engine](leveling-engine.md) | Override-with-default XP multiplier resolution (closed a latent 0-XP bug) + a sealed-interface level outcome with exhaustive pattern matching |
 | [Level-Up Notifications](level-up-notifications.md) | A caller-scoped notification feed, plus a real JPA-attribute-naming bug and how it was fixed |
 
+## Progression, Ranks & Retention
+
+| Doc | What it demonstrates |
+|---|---|
+| [Rank & Level System](rank-and-level-system.md) | A scheduled batch computing percentile-based tiers into a materialized snapshot, so every read stays O(1) instead of re-ranking on every request |
+| [Achievement Badges](achievement-badges.md) | A criteria-driven rules engine (one `switch`, four badge kinds, all data-defined) reusing the codebase's idempotent-upsert grant pattern — and an honest gap: implemented, tested, not yet wired to a trigger |
+| [Streaks](streaks.md) | A consecutive-day gap-state-machine multiplier that stacks onto XP, entirely inside the producing service — the consuming service needed zero changes |
+
 ## Cross-Cutting & Quality
 
 | Doc | What it demonstrates |
 |---|---|
 | [Error Handling](error-handling.md) | One RFC 7807 `ProblemDetail` contract across every service, no-user-enumeration login errors, and byte-for-byte pass-through through the gateway |
-| [Testing Strategy](testing-strategy.md) | A sliced test pyramid (27 classes) with `InOrder`/`ArgumentCaptor` side-effect verification and `@MockBean`-hermetic context tests |
+| [Testing Strategy](testing-strategy.md) | A sliced test pyramid (39 classes) with `InOrder`/`ArgumentCaptor` side-effect verification and `@MockBean`-hermetic context tests |
 
 ## Platform
 
@@ -53,10 +61,10 @@ territory.
 | Concurrency-safe XP | gamification-service | `service/impl/LevelTrackerServiceImpl.java` |
 | Leveling engine | activity-service, gamification-service | `dao/Activity.java`, `domain/LevelOutcome.java` |
 | Level-up notifications | gamification-service | `service/impl/NotificationServiceImpl.java` |
+| Rank & level system | gamification-service | `service/impl/RankRecomputeServiceImpl.java` |
+| Achievement badges | gamification-service | `service/impl/AchievementServiceImpl.java` |
+| Streaks | activity-service | `service/impl/ActivityLogServiceImpl.java` (`applyStreak`) |
 | Error handling | all three web services | `exception/GlobalExceptionHandler.java` |
 | Testing strategy | all four | `*/src/test/...` |
 | Discovery, health & containers | all four | `docker-compose.yml`, `*/Dockerfile` |
 | Distributed tracing & metrics | all four | `docker-compose.yml`, `prometheus.yml`, `grafana/` |
-
-## Related
-[Root README](../../README.md) · [API.md](../../API.md)

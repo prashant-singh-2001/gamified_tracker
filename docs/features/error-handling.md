@@ -123,5 +123,4 @@ curl -i -X POST http://localhost:8080/api/level -H "Authorization: Bearer $TOKEN
 
 ## Related
 [Authentication & Identity Propagation](authentication-and-identity.md) (the no-enumeration login) ·
-[API Gateway Routing](api-gateway-routing.md) (byte-for-byte pass-through) ·
-[`API.md` § Error Response Format](../../API.md#error-response-format)
+[API Gateway Routing](api-gateway-routing.md) (byte-for-byte pass-through)

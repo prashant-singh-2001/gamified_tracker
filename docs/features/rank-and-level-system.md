@@ -1,11 +1,7 @@
 # Overall Level, Percentile Ranks & Within-Tier Leaderboards
 
-> **A note on this doc's context:** the `docs/features/` folder that previously held this project's
-> other showcase docs (authentication, rate limiting, event-driven decoupling, and eight others) is no
-> longer present in the working tree — it appears to have been lost in a branch/merge operation
-> somewhere between sessions, not something this doc can recover. This file starts a fresh
-> `docs/features/` folder with the newest feature; the others would need to be regenerated separately
-> if wanted.
+**Service:** `gamification-service` · **Key classes:** `RankTier`, `RankRecomputeServiceImpl`,
+`UserRank`, `RankService`, `RankController`
 
 ## What it is / why it's notable
 
@@ -71,8 +67,7 @@ expensive O(N) work.
 
 ## Key classes & code
 
-**`RankTier`** — [gamification-service/.../dao/RankTier.java](../../gamification-service/src/main/java/com/tracker/gamification/dao/RankTier.java)
-is the single authoritative percentile→tier mapping. Each of the 9 tiers carries its `[lo, hi)` band;
+**`RankTier`** (`gamification-service/.../dao/RankTier.java`) is the single authoritative percentile→tier mapping. Each of the 9 tiers carries its `[lo, hi)` band;
 `fromTopFraction` scans from the top tier down and returns the first one whose `lo` the fraction clears —
 so every tier's upper edge is implicit (the next tier's `lo`), and there's no separate boundary to keep
 in sync:
@@ -169,12 +164,13 @@ curl http://localhost:8080/api/ranks -H "Authorization: Bearer $TOKEN"
 
 ## Related
 
-- [API.md](../../API.md), [gamification-service/README.md](../../gamification-service/README.md)
 - Reuses the concurrency-safe idempotent-upsert pattern from `LevelTracker.insertIfAbsent` and
-  `UserAchievementRepository.grantIfAbsent` (the achievements feature, built alongside this one).
-- `RANK_AND_LEVEL_SYSTEM_TODO.md` at the repo root is the implementation plan this feature was built
-  from, including the sections intentionally left undone: live overall-level feedback inside the XP
-  write path, and a small-population gate below which ranks are suppressed.
+  `UserAchievementRepository.grantIfAbsent` (the achievements feature, built alongside this one) — see
+  [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md) and [Achievement Badges](achievement-badges.md).
+- `LeaderboardController`/`LeaderboardService` (`/leaderboard`, `/leaderboard/activity/{id}`,
+  `/leaderboard/me`) is an earlier, simpler leaderboard that computes rankings live per request straight
+  off `LevelTrackerRepository` — no snapshot, no tiers. It still exists and is still tested, but this
+  `UserRank`-snapshot system is the one this doc covers and the one worth reading first.
 
 ---
 _Verified against the working tree on 2026-07-22; snippets are illustrative — confirm against source
