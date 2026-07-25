@@ -1,12 +1,13 @@
 package com.tracker.activity.controller;
 
-import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.ActivityLogRequest;
+import com.tracker.activity.dto.ActivityLogResponse;
+import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.service.ActivityLogService;
-
 import jakarta.validation.Valid;
-import lombok.AllArgsConstructor;
+import jakarta.validation.constraints.Positive;
 
+import lombok.AllArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -18,7 +19,6 @@ import java.util.List;
 public class ActivityLogController {
 
     private final ActivityLogService activityLogService;
-
 
 
     @GetMapping("/{id}")
@@ -35,4 +35,11 @@ public class ActivityLogController {
     public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(@PathVariable("id") Long id) {
         return activityLogService.getAllActivityForUser(id);
     }
+
+    @GetMapping("/streaks/user/{id}")
+    public ResponseEntity<List<StreakResponse>> getAllStreaksForUser(@PathVariable("id") Long id) {
+        return activityLogService.getStreaksForUser(id);
+    }
+
+   
 }

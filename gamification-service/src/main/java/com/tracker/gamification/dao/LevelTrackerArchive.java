@@ -17,7 +17,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Builder
 @Entity
-@Table(name = "LevelTrackerArchive")
+@Table(name = "level_tracker_archive")
 public class LevelTrackerArchive {
 
     @Id

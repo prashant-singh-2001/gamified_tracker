@@ -8,7 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table
+@Table(name = "overall_level_threshold")
 @Data
 @AllArgsConstructor
 @NoArgsConstructor

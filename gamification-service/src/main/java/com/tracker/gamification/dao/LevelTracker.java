@@ -12,7 +12,7 @@ import lombok.*;
 @EqualsAndHashCode
 @Builder
 @Entity
-@Table(name = "LevelTracker",
+@Table(name = "level_tracker",
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_level_tracker_user_activity",
                 columnNames = {"user_id", "activity_id"}))

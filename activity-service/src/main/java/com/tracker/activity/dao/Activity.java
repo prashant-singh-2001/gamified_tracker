@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 @Builder
 @Entity
 @Table(
+        name = "activity",
         uniqueConstraints = @UniqueConstraint(columnNames = {"name"}))
 public class Activity {
 

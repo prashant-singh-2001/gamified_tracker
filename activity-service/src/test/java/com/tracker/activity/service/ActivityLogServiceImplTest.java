@@ -3,6 +3,7 @@ package com.tracker.activity.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.ActivityLog;
+import com.tracker.activity.dao.ActivityStreak;
 import com.tracker.activity.dao.Category;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
@@ -13,6 +14,7 @@ import com.tracker.activity.outbox.OutboxEvent;
 import com.tracker.activity.outbox.OutboxEventRepository;
 import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.repository.ActivityRepository;
+import com.tracker.activity.repository.ActivityStreakRepository;
 import com.tracker.activity.service.impl.ActivityLogServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -35,25 +37,29 @@ import static org.mockito.Mockito.*;
 @DisplayName("ActivityLog Service Tests")
 public class ActivityLogServiceImplTest {
 
-    @Mock
-    private ActivityLogRepository activityLogRepository;
-
-    @Mock
-    private ActivityRepository activityRepository;
-
-    @Mock
-    private OutboxEventRepository outboxEventRepository;
-
     // Real ObjectMapper (not mocked) so the outbox payload assertions exercise real
     // serialization/deserialization, matching production behavior.
     private final ObjectMapper objectMapper = new ObjectMapper();
-
+    @Mock
+    private ActivityLogRepository activityLogRepository;
+    @Mock
+    private ActivityRepository activityRepository;
+    @Mock
+    private OutboxEventRepository outboxEventRepository;
+    @Mock
+    private ActivityStreakRepository activityStreakRepository;
     private ActivityLogServiceImpl activityLogService;
 
     @BeforeEach
     void setUp() {
         activityLogService = new ActivityLogServiceImpl(
-                activityLogRepository, activityRepository, outboxEventRepository, objectMapper);
+                activityLogRepository, activityRepository, outboxEventRepository, objectMapper, activityStreakRepository);
+        // Default streak behaviour for the add-log tests that don't care about streaks: save
+        // echoes its argument so applyStreak returns a non-null streak. lenient() because the
+        // read-only tests never reach this path. findByUserIdAndActivityId returns Optional.empty()
+        // via Mockito's default, so those tests see a fresh streak (currentStreak=1, x1.0 -> XP unchanged).
+        lenient().when(activityStreakRepository.save(any(ActivityStreak.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     private void stubActivityAndSave(Activity activity, Long generatedId) {
@@ -257,5 +263,96 @@ public class ActivityLogServiceImplTest {
         assertNotNull(resp);
         assertEquals(2, resp.getBody().size());
         verify(activityLogRepository).findByUserId(2L);
+    }
+
+    @Test
+    @DisplayName("first-ever log starts the streak at 1 with a 1.00x multiplier")
+    void firstLog_startsStreakAtOne() {
+        Activity activity = Activity.builder().id(7L).name("Read").category(Category.STUDY)
+                .xpMultiplier(1.0).active(true).build();
+        stubActivityAndSave(activity, 100L);
+        when(activityStreakRepository.findByUserIdAndActivityId(1L, 7L)).thenReturn(Optional.empty());
+        when(activityStreakRepository.save(any(ActivityStreak.class))).thenAnswer(i -> i.getArgument(0));
+
+        var req = new ActivityLogRequest("Read",
+                LocalDateTime.now().minusMinutes(30), LocalDateTime.now(), "note", null);
+        var body = activityLogService.addActivityLogResponseResponseEntity(1L, req).getBody();
+
+        assertEquals(1, body.currentStreak());
+        assertEquals(1.0, body.streakMultiplier());
+    }
+
+    @Test
+    @DisplayName("a log the day after the last one extends the streak and raises the multiplier")
+    void consecutiveDay_extendsStreak() {
+        Activity activity = Activity.builder().id(7L).name("Read").category(Category.STUDY)
+                .xpMultiplier(1.0).active(true).build();
+        stubActivityAndSave(activity, 101L);
+
+        LocalDateTime start = LocalDateTime.now().minusMinutes(30);
+        ActivityStreak existing = ActivityStreak.builder()
+                .userId(1L).activityId(7L).currentStreak(4).longestStreak(4)
+                .lastActivityDate(start.toLocalDate().minusDays(1))   // yesterday
+                .build();
+        when(activityStreakRepository.findByUserIdAndActivityId(1L, 7L)).thenReturn(Optional.of(existing));
+        when(activityStreakRepository.save(any(ActivityStreak.class))).thenAnswer(i -> i.getArgument(0));
+
+        var req = new ActivityLogRequest("Read", start, start.plusMinutes(30), "note", null);
+        var body = activityLogService.addActivityLogResponseResponseEntity(1L, req).getBody();
+
+        assertEquals(5, body.currentStreak());
+        assertEquals(1.20, body.streakMultiplier(), 1e-9);   // 1.0 + min(4,10)*0.05
+
+        ArgumentCaptor<ActivityStreak> captor = ArgumentCaptor.forClass(ActivityStreak.class);
+        verify(activityStreakRepository).save(captor.capture());
+        assertEquals(5, captor.getValue().getCurrentStreak());
+        assertEquals(5, captor.getValue().getLongestStreak());
+    }
+
+    @Test
+    @DisplayName("a gap of more than one day resets the streak to 1")
+    void missedDay_resetsStreak() {
+        Activity activity = Activity.builder().id(7L).name("Read").category(Category.STUDY)
+                .xpMultiplier(1.0).active(true).build();
+        stubActivityAndSave(activity, 102L);
+
+        LocalDateTime start = LocalDateTime.now().minusMinutes(30);
+        ActivityStreak existing = ActivityStreak.builder()
+                .userId(1L).activityId(7L).currentStreak(8).longestStreak(8)
+                .lastActivityDate(start.toLocalDate().minusDays(3))   // 3 days ago
+                .build();
+        when(activityStreakRepository.findByUserIdAndActivityId(1L, 7L)).thenReturn(Optional.of(existing));
+        when(activityStreakRepository.save(any(ActivityStreak.class))).thenAnswer(i -> i.getArgument(0));
+
+        var req = new ActivityLogRequest("Read", start, start.plusMinutes(30), "note", null);
+        var body = activityLogService.addActivityLogResponseResponseEntity(1L, req).getBody();
+
+        assertEquals(1, body.currentStreak());
+        assertEquals(1.0, body.streakMultiplier());
+        // longestStreak is preserved even though currentStreak reset
+        ArgumentCaptor<ActivityStreak> captor = ArgumentCaptor.forClass(ActivityStreak.class);
+        verify(activityStreakRepository).save(captor.capture());
+        assertEquals(8, captor.getValue().getLongestStreak());
+    }
+
+    @Test
+    @DisplayName("a second log the same day does not advance the streak")
+    void sameDay_doesNotAdvance() {
+        Activity activity = Activity.builder().id(7L).name("Read").category(Category.STUDY)
+                .xpMultiplier(1.0).active(true).build();
+        stubActivityAndSave(activity, 103L);
+
+        LocalDateTime start = LocalDateTime.now().minusMinutes(30);
+        ActivityStreak existing = ActivityStreak.builder()
+                .userId(1L).activityId(7L).currentStreak(6).longestStreak(6)
+                .lastActivityDate(start.toLocalDate())   // already logged today
+                .build();
+        when(activityStreakRepository.findByUserIdAndActivityId(1L, 7L)).thenReturn(Optional.of(existing));
+        when(activityStreakRepository.save(any(ActivityStreak.class))).thenAnswer(i -> i.getArgument(0));
+
+        var req = new ActivityLogRequest("Read", start, start.plusMinutes(30), "note", null);
+        var body = activityLogService.addActivityLogResponseResponseEntity(1L, req).getBody();
+
+        assertEquals(6, body.currentStreak());
     }
 }

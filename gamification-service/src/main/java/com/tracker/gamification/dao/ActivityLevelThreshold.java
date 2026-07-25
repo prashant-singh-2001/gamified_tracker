@@ -6,7 +6,7 @@ import jakarta.persistence.Table;
 import lombok.*;
 
 @Entity
-@Table(name = "ActivityLevelThreshold")
+@Table(name = "activity_level_threshold")
 @NoArgsConstructor
 @Data
 @AllArgsConstructor

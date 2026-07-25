@@ -40,6 +40,7 @@
     { "key": "userBId", "value": "", "type": "string" },
     { "key": "activityName", "value": "", "type": "string" },
     { "key": "activityLogId", "value": "", "type": "string" },
+    { "key": "loggedActivityId", "value": "", "type": "string" },
     { "key": "thresholdActivityId", "value": "1", "type": "string" },
     { "key": "rlAttempts", "value": "0", "type": "string" },
     { "key": "userATier", "value": "", "type": "string" }
@@ -435,6 +436,7 @@
                   "if (pm.response.code === 200) {",
                   "    var json = pm.response.json();",
                   "    pm.collectionVariables.set('activityLogId', String(json.id));",
+                  "    pm.collectionVariables.set('loggedActivityId', String(json.activity.id));",
                   "    pm.test('Log is owned by the authenticated caller (User A), not any client-supplied value', function () {",
                   "        pm.expect(String(json.userId)).to.eql(pm.collectionVariables.get('userAId'));",
                   "    });",
@@ -554,6 +556,46 @@
                   "pm.test('Response is an array', function () {",
                   "    pm.expect(pm.response.json()).to.be.an('array');",
                   "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Streaks For User (User A)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/streaks/user/{{userAId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "streaks", "user", "{{userAId}}"]
+            },
+            "description": "Issue #12 (streaks). Every logged activity advances a per-(user, activity) streak; the log created earlier in this folder should have started one at currentStreak = 1."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('activityLogId')) {",
+                  "    pm.test.skip('Skipped - no activityLogId (Create Activity Log likely failed, see that request)');",
+                  "} else {",
+                  "    pm.test('Status is 200', function () {",
+                  "        pm.response.to.have.status(200);",
+                  "    });",
+                  "    var json = pm.response.json();",
+                  "    pm.test('Response is an array', function () {",
+                  "        pm.expect(json).to.be.an('array');",
+                  "    });",
+                  "    pm.test('Contains a streak row for the activity logged earlier, with currentStreak >= 1', function () {",
+                  "        var loggedActivityId = pm.collectionVariables.get('loggedActivityId');",
+                  "        var entry = json.find(function (s) { return String(s.activityId) === loggedActivityId; });",
+                  "        pm.expect(entry).to.not.be.undefined;",
+                  "        pm.expect(entry.currentStreak).to.be.at.least(1);",
+                  "    });",
+                  "}"
                 ]
               }
             }
@@ -1197,6 +1239,32 @@
           ]
         },
         {
+          "name": "Read Another User's Streaks (Open Read By Design)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/streaks/user/{{userBId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "streaks", "user", "{{userBId}}"]
+            },
+            "description": "User A reading User B's streak data. Same open-read design as the other activitylog reads - must be 200, not 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 (open read by design)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "No Token - Request Rejected",
           "request": {
             "method": "GET",
@@ -1434,6 +1502,34 @@
                 "exec": [
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Streaks For User (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{activityServiceUrl}}/activitylog/streaks/user/{{userAId}}",
+              "host": ["{{activityServiceUrl}}"],
+              "path": ["activitylog", "streaks", "user", "{{userAId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
                   "});"
                 ]
               }

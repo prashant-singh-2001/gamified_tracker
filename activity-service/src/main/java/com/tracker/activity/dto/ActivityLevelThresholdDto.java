@@ -3,6 +3,6 @@ package com.tracker.activity.dto;
 public record ActivityLevelThresholdDto(
         Long activityId,
         Integer level,
-        Integer xpRequired
+        double xpRequired
 ) {
 }

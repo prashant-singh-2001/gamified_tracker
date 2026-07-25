@@ -10,7 +10,7 @@ import org.springframework.data.domain.Persistable;
 import java.time.LocalDateTime;
 
 @Entity
-@Table
+@Table(name = "user_rank")
 @Data
 @NoArgsConstructor
 public class UserRank implements Persistable<Long> {

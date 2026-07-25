@@ -37,6 +37,20 @@ jobs:
       - name: Start application
         run: docker compose up -d
 
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "===== eureka-server logs ====="
+          docker compose logs eureka-server
+          echo "===== tracker-gateway logs ====="
+          docker compose logs gateway
+          echo "===== tracker-activity logs ====="
+          docker compose logs activity
+          echo "===== tracker-gamification logs ====="
+          docker compose logs gamification
+          echo "===== full docker compose ps ====="
+          docker compose ps -a
+
       - name: Verify services up
         run: |
           curl --fail http://localhost:8761/actuator/health
