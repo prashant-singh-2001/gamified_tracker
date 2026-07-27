@@ -355,4 +355,73 @@ public class ActivityLogServiceImplTest {
 
         assertEquals(6, body.currentStreak());
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Issue #7 — Enforce Activity.active soft-delete flag
+    // ──────────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("addActivityLog throws InactiveActivityException when activity is soft-deleted (no XP/streak/outbox side-effects)")
+    void testAddActivityLog_inactiveActivity_isRejected() {
+        LocalDateTime now = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Gaming", now, now.plusMinutes(60), "notes", now);
+
+        Activity inactive = Activity.builder()
+                .id(99L)
+                .name("Gaming")
+                .category(Category.GAMING)
+                .xpMultiplier(0.8)
+                .active(false) // soft-deleted
+                .build();
+
+        when(activityRepository.findByName("Gaming")).thenReturn(Optional.of(inactive));
+
+        assertThrows(com.tracker.activity.exception.InactiveActivityException.class,
+                () -> activityLogService.addActivityLogResponseResponseEntity(1L, request));
+
+        // nothing must be written when the activity is inactive
+        verifyNoInteractions(activityLogRepository);
+        verifyNoInteractions(outboxEventRepository);
+        verifyNoInteractions(activityStreakRepository);
+    }
+
+    @Test
+    @DisplayName("addActivityLog succeeds normally when activity.active is true")
+    void testAddActivityLog_activeActivity_isAllowed() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(30), "notes", start);
+
+        Activity active = Activity.builder()
+                .id(10L)
+                .name("Study")
+                .category(Category.STUDY)
+                .xpMultiplier(1.5)
+                .active(true) // enabled
+                .build();
+
+        ActivityLog savedLog = ActivityLog.builder()
+                .id(1L)
+                .userId(1L)
+                .activity(active)
+                .startTime(start)
+                .endTime(start.plusMinutes(30))
+                .durationMinutes(30)
+                .xpEarned(45.0)
+                .notes("notes")
+                .createdAt(start)
+                .build();
+
+        when(activityRepository.findByName("Study")).thenReturn(Optional.of(active));
+        when(activityLogRepository.save(any())).thenReturn(savedLog);
+        when(activityStreakRepository.findByUserIdAndActivityId(1L, 10L)).thenReturn(Optional.empty());
+        when(activityStreakRepository.save(any(ActivityStreak.class))).thenAnswer(i -> i.getArgument(0));
+        when(outboxEventRepository.save(any(OutboxEvent.class))).thenAnswer(i -> i.getArgument(0));
+
+        ResponseEntity<com.tracker.activity.dto.ActivityLogResponse> response =
+                activityLogService.addActivityLogResponseResponseEntity(1L, request);
+
+        assertEquals(200, response.getStatusCode().value());
+        verify(activityLogRepository).save(any());
+        verify(outboxEventRepository).save(any(OutboxEvent.class));
+    }
 }

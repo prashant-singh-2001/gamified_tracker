@@ -8,6 +8,7 @@ import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.exception.ActivityNotFoundException;
+import com.tracker.activity.exception.InactiveActivityException;
 import com.tracker.activity.exception.InvalidTimeRangeException;
 import com.tracker.activity.outbox.OutboxEvent;
 import com.tracker.activity.outbox.OutboxEventRepository;
@@ -122,10 +123,19 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     }
 
     private ActivityLog mapToActivityLog(Long userId, ActivityLogRequest activityLogRequest) {
+        var activity = activityRepository.findByName(activityLogRequest.activityName())
+                .orElseThrow(() -> new ActivityNotFoundException(
+                        "Activity not found: " + activityLogRequest.activityName()));
+
+        // Issue #7: reject log attempts against soft-deleted activities before any
+        // XP or streak side-effects are applied.
+        if (!activity.isActive()) {
+            throw new InactiveActivityException(activityLogRequest.activityName());
+        }
+
         return ActivityLog.builder()
                 .userId(userId)
-                .activity(activityRepository.findByName(activityLogRequest.activityName())
-                        .orElseThrow(() -> new ActivityNotFoundException("Activity not found: " + activityLogRequest.activityName())))
+                .activity(activity)
                 .startTime(activityLogRequest.startTime())
                 .endTime(activityLogRequest.endTime())
                 .notes(activityLogRequest.notes())
