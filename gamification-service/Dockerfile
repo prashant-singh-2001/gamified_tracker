@@ -6,6 +6,11 @@ COPY pom.xml .
 COPY contracts/pom.xml contracts/pom.xml
 COPY gamification-service/pom.xml gamification-service/pom.xml
 
+# See activity-service/Dockerfile — the parent POM itself must be installed first (-N =
+# non-recursive), otherwise gamification-service can install `contracts` fine here but fail
+# to resolve ITS parent when later depending on it as a dependency.
+RUN mvn -N install
+
 # See activity-service/Dockerfile — contracts must be in the local repo first.
 COPY contracts/src contracts/src
 RUN mvn -f contracts/pom.xml install -DskipTests
