@@ -1,6 +1,7 @@
 package com.tracker.gamification.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tracker.contracts.event.ActivityLoggedEvent;
 import org.springframework.amqp.core.*;
 import org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper;
 import org.springframework.amqp.support.converter.Jackson2JavaTypeMapper;
@@ -8,6 +9,8 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.Map;
 
 @Configuration
 public class RabbitConfig {
@@ -49,15 +52,21 @@ public class RabbitConfig {
         return BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange).with(dlqKey);
     }
 
-    // Cross-service gotcha: the producer stamps its own __TypeId__ (com.tracker.activity...),
-    // which doesn't exist here. INFERRED precedence makes the converter deserialize into the
-    // @RabbitListener method's parameter type instead, ignoring that header.
+    // The producer now stamps the stable ActivityLoggedEvent.TYPE_ID, and the record itself lives
+    // in the shared contracts module, so the header is finally resolvable on both sides.
+    //
+    // Precedence deliberately stays INFERRED, NOT TYPE_ID: a pre-upgrade activity-service still
+    // publishes __TypeId__ = com.tracker.activity.messaging.ActivityLoggedEvent, which does not
+    // exist here. INFERRED ignores the header entirely and deserializes into the @RabbitListener
+    // parameter type, so a rolling deploy is safe in either order. Switch to TYPE_ID only once no
+    // pre-upgrade producer can still be publishing.
     @Bean
     public Jackson2JsonMessageConverter jsonConverter(ObjectMapper mapper) {
         Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter(mapper);
         DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
         typeMapper.setTypePrecedence(Jackson2JavaTypeMapper.TypePrecedence.INFERRED);
         typeMapper.setTrustedPackages("*");
+        typeMapper.setIdClassMapping(Map.of(ActivityLoggedEvent.TYPE_ID, ActivityLoggedEvent.class));
         converter.setJavaTypeMapper(typeMapper);
         return converter;
     }

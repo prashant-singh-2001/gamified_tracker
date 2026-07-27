@@ -5,7 +5,15 @@ WORKDIR /app
 # copy root parent POM + this service's POM first (Docker layer caching:
 # dependency resolution only reruns if a pom.xml actually changes)
 COPY pom.xml .
+COPY contracts/pom.xml contracts/pom.xml
 COPY activity-service/pom.xml activity-service/pom.xml
+
+# The shared contracts module must be installed into the local repo BEFORE this service's
+# single-module reactor tries to resolve it. `mvn -f <module>/pom.xml` does not build siblings,
+# and -am is a no-op without -pl, so an explicit install is the minimal fix.
+COPY contracts/src contracts/src
+RUN mvn -f contracts/pom.xml install -DskipTests
+
 RUN mvn -f activity-service/pom.xml dependency:go-offline
 
 # now copy source and build

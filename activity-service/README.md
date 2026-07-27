@@ -21,6 +21,8 @@ Owns the catalog of activities (Study, Gaming, Work, …) and the record of each
 
 Called by: **api-gateway**. Publishes to: **RabbitMQ** (`ActivityLoggedEvent`, consumed by gamification-service — no direct HTTP/Feign call). Registers with **Eureka**; persists to **PostgreSQL**.
 
+`ActivityLoggedEvent` is defined once in the shared `contracts` module (`com.tracker.contracts.event.ActivityLoggedEvent`), not duplicated per service — see [issue #23](https://github.com/prashant-singh-2001/gamified_tracker/issues/23).
+
 ## Responsibilities
 
 - CRUD-ish management of `Activity` definitions (name, category, XP multiplier, active flag).
@@ -176,7 +178,7 @@ Standard env vars (root [`.env.example`](../.env.example)): `SPRING_DATASOURCE_U
 
 ## Inter-service dependencies
 
-- **Publishes to:** RabbitMQ (`ActivityLoggedEvent`, exchange `activity.events`) — consumed by gamification-service. No Feign client, no synchronous HTTP call to any other service.
+- **Publishes to:** RabbitMQ (`com.tracker.contracts.event.ActivityLoggedEvent`, exchange `activity.events`) — consumed by gamification-service. No Feign client, no synchronous HTTP call to any other service.
 - **Called by:** api-gateway.
 - **Infra:** Eureka, PostgreSQL, RabbitMQ.
 

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.tracker</groupId>
+        <artifactId>gamified-tracker-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>coverage-report</artifactId>
+    <packaging>pom</packaging>
+    <description>
+        No source of its own. Depends on every other module purely so the reactor builds them
+        first; jacoco:report-aggregate then merges their target/jacoco.exec + target/classes into
+        one HTML/XML report at coverage-report/target/site/jacoco-aggregate/index.html.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.tracker</groupId>
+            <artifactId>contracts</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.tracker</groupId>
+            <artifactId>activity-service</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.tracker</groupId>
+            <artifactId>gamification-service</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.tracker</groupId>
+            <artifactId>api-gateway</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.tracker</groupId>
+            <artifactId>eureka-server</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                Adds report-aggregate as an EXTRA execution alongside the prepare-agent/report
+                executions this module already inherits from the root pom's <plugins> block
+                (those two no-op here — there's no test source). report-aggregate reads each
+                dependency's jacoco.exec + compiled classes directly from the reactor, so this
+                only works when built in the same session as the modules above, e.g.
+                `mvn clean verify` from the repo root, or `mvn -pl coverage-report -am verify`.
+            -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>jacoco-aggregate-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report-aggregate</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

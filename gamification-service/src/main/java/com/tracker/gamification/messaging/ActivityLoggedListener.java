@@ -1,5 +1,6 @@
 package com.tracker.gamification.messaging;
 
+import com.tracker.contracts.event.ActivityLoggedEvent;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
 import com.tracker.gamification.service.LevelTrackerService;
 import org.slf4j.Logger;
