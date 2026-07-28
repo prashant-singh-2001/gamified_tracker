@@ -405,7 +405,7 @@ public class ActivityLogServiceImplTest {
                 .activity(active)
                 .startTime(start)
                 .endTime(start.plusMinutes(30))
-                .durationMinutes(30)
+                .durationMinutes(30L)
                 .xpEarned(45.0)
                 .notes("notes")
                 .createdAt(start)
