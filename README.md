@@ -32,6 +32,7 @@ A microservices-based activity tracker with gamification. Log activities, earn X
 - **API Gateway** — single entry point; handles JWT auth and routes to services.
 - **Activity Service** — manages activities and logs activity sessions (computes XP).
 - **Gamification Service** — tracks levels, thresholds, and awards points.
+- **Config Service** — centralized Spring Cloud Config Server for microservice configurations.
 - **Eureka Server** — service registry/discovery.
 - **Prometheus** — scrapes `/actuator/prometheus` from every service and stores metrics.
 - **Grafana** — pre-provisioned dashboard (JVM memory, CPU, uptime, restarts) backed by Prometheus.
@@ -40,7 +41,7 @@ A microservices-based activity tracker with gamification. Log activities, earn X
 
 ## Tech stack
 
-Java 17 · Spring Boot 3.5 · Spring Cloud 2025 (Eureka) · RabbitMQ (Spring AMQP) · Spring Security + JWT · PostgreSQL 15 · Maven · Docker Compose · Prometheus · Grafana · Zipkin · Micrometer
+Java 17 · Spring Boot 3.5 · Spring Cloud 2025 (Eureka, Config) · RabbitMQ (Spring AMQP) · Spring Security + JWT · PostgreSQL 15 · Maven · Docker Compose · Prometheus · Grafana · Zipkin · Micrometer
 
 ## Quick start
 
@@ -54,7 +55,7 @@ cp .env.example .env
 docker-compose up --build
 ```
 
-That's it — all services, Eureka, PostgreSQL, RabbitMQ, Redis, Prometheus, Grafana, and Zipkin start together.
+That's it — all services, Eureka, Config Server, PostgreSQL, RabbitMQ, Redis, Prometheus, Grafana, and Zipkin start together.
 
 ## Ports
 
@@ -63,6 +64,7 @@ That's it — all services, Eureka, PostgreSQL, RabbitMQ, Redis, Prometheus, Gra
 | API Gateway          | 8080 |
 | Activity Service     | 8081 |
 | Gamification Service | 8082 |
+| Config Service       | 8888 |
 | Eureka dashboard     | 8761 |
 | PostgreSQL           | 5433 |
 | Prometheus             | 9090 |

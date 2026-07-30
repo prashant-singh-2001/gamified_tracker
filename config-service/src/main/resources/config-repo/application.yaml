@@ -1,0 +1,21 @@
+# Notice: Phase 1 Config Server repository. Not yet active on microservices (no service imports this yet; see Phase 2).
+# Shared configuration for all gamified_tracker microservices
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  tracing:
+    sampling:
+      probability: 1.0
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://eureka-server:8761/eureka}
+  instance:
+    prefer-ip-address: true
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:},%X{traceId:-},%X{spanId:-}]"

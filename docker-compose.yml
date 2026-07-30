@@ -51,6 +51,26 @@ services:
       retries: 10
       start_period: 40s
 
+  config-service:
+    build:
+      context: .
+      dockerfile: config-service/Dockerfile
+    container_name: config-service
+    ports:
+      - "8888:8888"
+    environment:
+      - EUREKA_SERVER_URL=http://eureka-server:8761/eureka
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --spider -q http://localhost:8888/actuator/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+
   redis:
     image: redis:7-alpine
     container_name: tracker-redis

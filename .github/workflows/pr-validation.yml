@@ -54,6 +54,7 @@ jobs:
       - name: Verify services up
         run: |
           curl --fail http://localhost:8761/actuator/health
+          curl --fail http://localhost:8888/actuator/health
           curl --fail http://localhost:8080/actuator/health
           curl --fail http://localhost:8081/actuator/health
           curl --fail http://localhost:8082/actuator/health

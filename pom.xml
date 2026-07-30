@@ -26,6 +26,7 @@
 
     <modules>
         <module>contracts</module>
+        <module>config-service</module>
         <module>activity-service</module>
         <module>gamification-service</module>
         <module>api-gateway</module>
