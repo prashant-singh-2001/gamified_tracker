@@ -201,10 +201,23 @@ All reads here are **intentionally open** — any authenticated player can view 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/threshold` | authenticated | list all thresholds |
+| `GET` | `/api/threshold/activity/{activityId}?upToLevel=10` | authenticated | the activity's **effective** ladder: its explicit rows if it has any, otherwise the default curve generated for levels 1..`upToLevel`. Nothing is persisted either way |
 | `POST` | `/api/threshold/activity` | authenticated | look up one threshold by composite key (a read, despite `POST`) |
 | `POST` | `/api/threshold` | authenticated | create (or overwrite) a threshold |
 
 Request/response bodies mirror the Gamification Service (`activityId`, `level`, `xpRequired`) — see [Gamification Service § Activity Level Threshold](#activity-level-threshold-1) below.
+
+---
+
+### Achievements
+
+Badges are granted automatically inside the XP transaction (every `POST /api/level` and every async XP application from `POST /api/activitylog`), so there is no "evaluate" endpoint — only a read.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/achievements` | authenticated | the **caller's own** unlocked badges, newest first. Scoped from the trusted `userId` header — there is no `/user/{id}` variant, so one user cannot read another's |
+
+Each element: `achievementId`, `code`, `name`, `description`, `criteriaType` (`TOTAL_XP` \| `REACH_LEVEL_ANY` \| `ACTIVITIES_LOGGED` \| `ACTIVITY_LEVEL`), `threshold`, `activityId` (only for `ACTIVITY_LEVEL`), `unlockedAt`.
 
 ---
 
@@ -241,7 +254,7 @@ List all activity logs for a user.
 
 ## Gamification Service (port 8082) — internal
 
-Base paths `/level` and `/threshold`. No auth layer of its own.
+Base paths `/level`, `/threshold`, `/notifications`, `/leaderboard`, `/ranks`, and `/achievements`. No auth layer of its own.
 
 ### Level Tracker
 
@@ -256,7 +269,11 @@ List every `LevelTracker` row (all users, all activities).
 | `level` | Integer | |
 | `totalXp` | double | total accumulated XP for this user+activity |
 | `currentLevelXp` | double | XP accumulated within the current level |
+| `xpForNextLevel` | double | XP still needed to reach the next level, rounded to 2dp. `0.0` when there is no next level to reach |
+| `progressPercent` | double | how far through the **current level's band** the user is, 0–100, rounded to 2dp. Reaching a new level resets this to ~0, it does not keep climbing toward 100 across levels. `100.0` when topped out |
 | `leveledUp` | boolean | `true` only on the `POST /level` response that actually crossed a threshold on that call. **Every `GET` endpoint below hardcodes this to `false`**, even for a row currently above level 1 — it's not derived from stored state, only from the outcome of the specific write that populated it. |
+
+Both progress fields follow the same precedence as the level itself: explicit `activity_level_threshold` rows if the activity has any, otherwise the default curve (`leveling.default-curve.*`). An activity that has exhausted its own explicit ladder reports `xpForNextLevel: 0.0, progressPercent: 100.0` rather than continuing onto the formula.
 
 #### `GET /level/{id}`
 Fetch one `LevelTracker` by its internal numeric id. `200 OK` or `404` `ProblemDetail` (`"LevelTracker with id: {id} not found"`).
@@ -326,7 +343,11 @@ Most `404` responses across all three services use Spring's RFC 7807 `ProblemDet
 }
 ```
 
-`401` (`POST /auth/login` failures) and `400` (validation failures on `POST /level`) also use `ProblemDetail`. Any route that fails to match at all (e.g. a typo'd path) still falls back to Spring's default whitelabel error body, since that never reaches application code.
+`401` (`POST /auth/login` failures) and `400` (validation failures) also use `ProblemDetail`. Validation `400`s carry every field violation joined into `detail`, e.g. `"Activity name is required; Start time is required"`.
+
+The `401` for a missing/expired/malformed bearer token and the `403` for a caller without the required role are written by Spring Security's filter chain rather than a controller advice; `ProblemDetailAuthenticationHandler` gives them `ProblemDetail` bodies too, so every error this API returns has one shape. Both still send `WWW-Authenticate: Bearer`. The `401` detail is intentionally generic (`"Authentication required or token is invalid"`) and never says *why* the token was rejected.
+
+Any route that fails to match at all (e.g. a typo'd path) still falls back to Spring's default whitelabel error body, since that never reaches application code.
 
 **Through the Gateway, downstream error bodies pass through byte-for-byte unchanged** — including the `instance` field, which still shows the *downstream* service's own path (e.g. `/level/999999`), not the Gateway's `/api/level/999999`. This is because routing is a real reverse proxy (Spring Cloud Gateway), not a hand-rolled wrapper that re-serializes responses. Verified: `GET /api/activity/does-not-exist` and `GET /api/level/999999` both return the exact same `ProblemDetail` body their respective service returns directly.
 
@@ -339,12 +360,12 @@ Most `404` responses across all three services use Spring's RFC 7807 `ProblemDet
 All previously-tracked issues in this section have been resolved and verified end-to-end:
 
 - ~~`ActivityController` route bug (stray whitespace) breaking `GET /activity/{name}`~~ — fixed.
-- ~~`@PreAuthorize("hasRole('ADMIN')")` inert due to missing `@EnableMethodSecurity` + `JwtFilter` granting no authorities~~ — fixed; non-admin tokens now get a real `403`.
+- ~~`@PreAuthorize("hasRole('ADMIN')")` inert due to missing `@EnableMethodSecurity` + the old `JwtFilter` granting no authorities~~ — fixed; non-admin tokens now get a real `403`. Authorities are now mapped from the `role` claim by `SecurityConfig`'s `JwtAuthenticationConverter`, and gating is by URL rather than `@PreAuthorize`.
 - ~~`AuthService.register` ignoring the requested `role`~~ — fixed; note the resulting tradeoff documented above (self-service `ADMIN` registration).
 - ~~`JwtUtil` ignoring the `jwt.expiration` config~~ — fixed; confirmed the token's `exp` claim moves when the config value changes.
 - ~~`LevelTrackerService.mapToDto` always returning `totalXp: 0.0`~~ — fixed.
 - ~~Inconsistent error shapes (raw `500`s / generic bodies instead of `ProblemDetail`)~~ — fixed for login failures and negative-`xp` validation.
-- ~~IDOR on writes: `POST /api/activitylog` and `POST /api/level` trusted a client-supplied `userId` in the body, so any authenticated user could log activities or grant XP **as any other user**~~ — fixed. The JWT now carries the numeric `userId`; `JwtFilter` injects it as a trusted `userId` header (overwriting/stripping any client-sent value) before the request is routed downstream; the write DTOs no longer accept `userId` in the body at all. (Historical note: this originally also covered activity-service's internal Feign call to gamification-service — that call no longer exists, see the next item.)
+- ~~IDOR on writes: `POST /api/activitylog` and `POST /api/level` trusted a client-supplied `userId` in the body, so any authenticated user could log activities or grant XP **as any other user**~~ — fixed. The JWT now carries the numeric `userId`; `UserIdHeaderFilter` injects it as a trusted `userId` header (overwriting/stripping any client-sent value) before the request is routed downstream; the write DTOs no longer accept `userId` in the body at all. (Historical notes: this originally also covered activity-service's internal Feign call to gamification-service — that call no longer exists, see the next item. The filter was previously named `JwtFilter` and also did the token parsing; that half now belongs to Spring Security's OAuth2 resource server.)
 - ~~`POST /api/activitylog` called Gamification Service *before* saving the log, so a gamification outage lost the activity log entirely~~ ([#4](https://github.com/prashant-singh-2001/gamified_tracker/issues/4)) — fixed via event-driven decoupling ([#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)): the log is saved first, an outbox row is written in the same transaction, and XP is applied asynchronously by a RabbitMQ consumer. Trade-off: `leveledUp` is no longer available synchronously — see the Level Tracker/Activity Log sections above. See [`EVENT_DRIVEN_DECOUPLING.md`](docs/features/event-driven-decoupling.md).
 
 Remaining non-issues, documented for awareness rather than as defects: `createdAt` is always server-set (client-supplied values on create endpoints are accepted but ignored); any caller can self-register as `ADMIN` (acceptable for a demo app); **reads are intentionally open** — any authenticated user can view any other user's activity logs and level/XP stats (`GET .../{id}`, `GET .../user/{id}`) as a deliberate social/leaderboard-style feature, not an access-control gap; **`bonusApplied`/`bonusMultiplier` are only ever real on the specific `POST` response that computed them** — every `GET` endpoint that returns an `ActivityLogResponse` hardcodes them to `false`/`1.0`, since they're not persisted, only computed in-memory at creation time; and **`leveledUp` is now `false` everywhere except the `POST /api/level`/`POST /level` response that actually crossed a threshold** (including on `POST /api/activitylog`/`POST /activitylog/`, since that write no longer applies XP synchronously — see Event-Driven Decoupling above). Direct calls to `:8081`/`:8082` bypassing the Gateway are also unauthenticated, since neither service has its own security layer — the `userId` header is only trustworthy when it arrives via the Gateway.

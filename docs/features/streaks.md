@@ -105,6 +105,11 @@ activityLog.setXpEarned(activityLog.getDurationMinutes() * multiplier * bonus * 
 multiplier and the random bonus — no branching, no separate code path for "streak days" vs. "non-streak
 days."
 
+Ordering note: the request is resolved and validated by `mapToActivityLog` *before* this runs, so a
+log against a soft-deleted activity throws `InactiveActivityException` (`409`) without ever reaching
+`applyStreak` — a rejected log can neither extend a streak nor break one. See
+[Error Handling](error-handling.md).
+
 ### 4. Reading it back — `GET /activitylog/streaks/user/{id}`
 
 ```java

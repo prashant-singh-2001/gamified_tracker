@@ -69,8 +69,9 @@ postgres, rabbitmq, redis  (independent)
         │
   gamification (waits on postgres + eureka + activity + gateway + rabbitmq healthy)
 ```
-On the gateway, `/actuator/**` is `permitAll`'d in both `SecurityConfig` and `JwtFilter` — health
-checks (Docker's own, or an external monitor) never need a token.
+On the gateway, `/actuator/**` is `permitAll`'d in `SecurityConfig`, and `UserIdHeaderFilter`
+short-circuits itself (`shouldNotFilter`) when no authentication is present — so health checks
+(Docker's own, or an external monitor) never need a token.
 
 ## Containerization — layered, multi-stage, non-root
 

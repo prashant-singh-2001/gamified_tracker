@@ -1,8 +1,10 @@
 # Event-Driven Decoupling — Transactional Outbox + Idempotent Consumer + DLQ
 
-**Services:** `activity-service` (producer) + `gamification-service` (consumer) · **Key classes:**
-`ActivityLogServiceImpl`, `OutboxEvent`/`OutboxEventRepository`/`OutboxRelay`,
-`ActivityLoggedListener`, `ProcessedEvent`/`ProcessedEventRepository`, `RabbitConfig` (both sides)
+**Services:** `activity-service` (producer) + `gamification-service` (consumer) + `contracts`
+(shared wire contract) · **Key classes:** `ActivityLogServiceImpl`,
+`OutboxEvent`/`OutboxEventRepository`/`OutboxRelay`, `ActivityLoggedListener`,
+`ProcessedEvent`/`ProcessedEventRepository`, `RabbitConfig` (both sides),
+`com.tracker.contracts.event.ActivityLoggedEvent`
 
 ## What it is / why it's notable
 
@@ -136,7 +138,7 @@ already `true`. XP is applied **exactly once** despite at-least-once delivery �
 [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)), so there's no business-logic fork
 between the sync and async paths.
 
-### 4. Dead-letter queue + a cross-service Jackson gotcha — `RabbitConfig` (gamification side)
+### 4. Dead-letter queue — `RabbitConfig` (gamification side)
 
 ```java
 Queue activityLoggedQueue = QueueBuilder.durable(queue)
@@ -148,13 +150,54 @@ Combined with `spring.rabbitmq.listener.simple.retry` (3 attempts) and
 `default-requeue-rejected: false`, a message that keeps failing is retried locally 3 times, then
 routed to a DLQ instead of looping forever.
 
-A second, easy-to-miss gotcha the config solves: the producer's `Jackson2JsonMessageConverter`
-stamps a `__TypeId__` header with its **own** fully-qualified class name
-(`com.tracker.activity.messaging.ActivityLoggedEvent`), which doesn't exist in gamification-service's
-classpath. The consumer's converter sets `TypePrecedence.INFERRED`, telling it to ignore that header
-and deserialize into whatever type the `@RabbitListener` method parameter declares instead — a
-structurally identical, separately-defined record on the other side. Without this, every message
-would fail deserialization with a `ClassNotFoundException`.
+### 5. One event record, defined once — the `contracts` module
+
+The event was originally declared **twice**: `com.tracker.activity.messaging.ActivityLoggedEvent`
+and `com.tracker.gamification.messaging.ActivityLoggedEvent`, two structurally identical records
+hand-kept in sync across services (issue #23). It now lives once, in a `contracts` library module
+both services depend on:
+
+```java
+public record ActivityLoggedEvent(Long logId, Long userId, Long activityId, double xpEarned) {
+    /** Stable logical name stamped into the AMQP __TypeId__ header. */
+    public static final String TYPE_ID = "activity.logged";
+}
+```
+
+`contracts` is deliberately not a service: no `spring-boot-maven-plugin` (repackaging would produce
+a fat jar nothing could depend on), and exactly one dependency — `jackson-databind`, test-scoped,
+used only by `ActivityLoggedEventWireFormatTest`. A contract jar that drags a framework onto every
+consumer's classpath stops being safe to share.
+
+That test is the point of the module: the wire format is plain field-name JSON with no embedded
+type information, so renaming a record component is a breaking change for both in-flight messages
+**and** every unpublished `outbox_event.payload` row already sitting in the producer's database. The
+test pins the field names so a refactor can't silently strand them.
+
+**The `__TypeId__` header.** By default `Jackson2JsonMessageConverter` stamps the producer's own
+FQCN into that header — historically
+`com.tracker.activity.messaging.ActivityLoggedEvent`, a class the consumer never had. The producer
+now stamps the stable logical id instead, so moving the record between packages can never change
+the wire header again:
+```java
+// activity-service RabbitConfig
+DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
+typeMapper.setIdClassMapping(Map.of(ActivityLoggedEvent.TYPE_ID, ActivityLoggedEvent.class));
+converter.setJavaTypeMapper(typeMapper);
+```
+The consumer maps the same id — but keeps `TypePrecedence.INFERRED`, which is the subtle call:
+
+```java
+// gamification-service RabbitConfig
+typeMapper.setTypePrecedence(Jackson2JavaTypeMapper.TypePrecedence.INFERRED);
+typeMapper.setTrustedPackages("*");
+typeMapper.setIdClassMapping(Map.of(ActivityLoggedEvent.TYPE_ID, ActivityLoggedEvent.class));
+```
+`INFERRED` ignores the header entirely and deserializes into whatever type the `@RabbitListener`
+parameter declares. A **pre-upgrade** activity-service still publishing the old FQCN header is
+therefore harmless, which makes a rolling deploy safe in either order — and the same property
+covers messages that were sitting in the queue across the upgrade. Switching to `TYPE_ID`
+precedence is only correct once no pre-upgrade producer can still be publishing.
 
 ## Two callers, one method
 

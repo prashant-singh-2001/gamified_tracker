@@ -1,13 +1,13 @@
 # Testing Strategy — Sliced, Fast, Hermetic
 
-**Services:** all four · **39 test classes** · **Key techniques:** test slices (`@WebMvcTest`,
-`@DataJpaTest`), Mockito unit tests, `InOrder`/`ArgumentCaptor`, H2 for the persistence layer,
-`@MockBean` to keep infra-dependent context tests hermetic
+**Modules:** all five · **47 test classes, 217 tests** · **Key techniques:** test slices
+(`@WebMvcTest`, `@DataJpaTest`), Mockito unit tests, `InOrder`/`ArgumentCaptor`, H2 for the
+persistence layer, `@MockitoBean` to keep infra-dependent context tests hermetic
 
 ## What it is / why it's notable
 
 The suite is built the way a Spring test suite *should* be — as a pyramid of fast, focused slices
-rather than a pile of slow full-context integration tests. 39 test classes across the four modules,
+rather than a pile of slow full-context integration tests. 47 test classes across the five modules,
 each using the narrowest Spring test slice that still exercises the thing under test (or no Spring
 context at all, where a plain constructor call does the job). The interesting parts aren't the counts
 — they're the specific choices that keep the suite fast and deterministic: verifying **ordering** of
@@ -19,10 +19,13 @@ without Docker.
 
 | Slice | Count | What it tests | Example |
 |---|---|---|---|
-| Plain unit (`@ExtendWith(MockitoExtension.class)` or none) | 18 | Service/domain logic, mocks at the boundary | `LevelTrackerServiceImplTest`, `AchievementServiceImplTest`, `RankTierTest` |
+| Plain unit (`@ExtendWith(MockitoExtension.class)` or no framework at all) | 25 | Service/domain logic, mocks at the boundary; pure functions with neither | `LevelTrackerServiceImplTest`, `AchievementServiceImplTest`, `RankTierTest`, `LevelCurveTest` |
 | `@DataJpaTest` (H2) | 10 | Repository queries against a real (in-memory) DB | `LevelTrackerRepositoryTest`, `ActivityStreakRepositoryTest`, `UserRankRepositoryTest` |
-| `@WebMvcTest` (MockMvc) | 7 | Controller HTTP contract, JSON, status codes | `NotificationControllerTest`, `RankControllerTest` |
+| `@WebMvcTest` (MockMvc) | 8 | Controller HTTP contract, JSON, status codes | `NotificationControllerTest`, `AchievementControllerTest` |
 | `@SpringBootTest` | 4 | One context-load smoke test per service | `ApiGatewayApplicationTests` |
+
+Per module: gamification-service 26, activity-service 11, api-gateway 8, and one apiece for
+eureka-server (context load) and `contracts` (the wire-format guard below).
 
 Each slice loads only the beans it needs — a `@WebMvcTest` doesn't spin up JPA or Redis, a
 `@DataJpaTest` doesn't start the web layer — so the vast majority of tests run in milliseconds.
@@ -84,7 +87,24 @@ regardless of the roll:
 assertEquals(body.durationMinutes() * 1.5 * body.bonusMultiplier(), body.xpEarned(), 1e-9);
 ```
 
-### 5. Hermetic full-context tests — mocking away Redis/RabbitMQ
+### 5. Pinning a wire contract — `ActivityLoggedEventWireFormatTest`
+
+The `contracts` module carries exactly one test, and it guards the thing a compiler can't: the JSON
+field names two services and a database column have all agreed on. Renaming a record component
+compiles fine everywhere and breaks every unpublished `outbox_event.payload` row. So the test
+asserts on the *serialized shape*, not on the record:
+```java
+Set<String> fields = new HashSet<>();
+json.fieldNames().forEachRemaining(fields::add);
+assertEquals(Set.of("logId", "userId", "activityId", "xpEarned"), fields);
+```
+An exact-set assertion, so an *added* field fails too — new fields are a producer-side change that
+old consumers must be checked against deliberately. Two more cases cover deserializing raw untyped
+JSON (exactly what `OutboxRelay` reads back out of the outbox table — no `@class`, no type header),
+and that `TYPE_ID` stays a `static` constant that never leaks into the payload. See
+[Event-Driven Decoupling](event-driven-decoupling.md).
+
+### 6. Hermetic full-context tests — mocking away Redis/RabbitMQ
 
 The gateway's `RateLimitConfig` eagerly opens a Redis connection at startup, which would make a naive
 `@SpringBootTest` fail outside `docker-compose`. Rather than require a real or embedded Redis, the
@@ -102,7 +122,10 @@ class ApiGatewayApplicationTests {
 }
 ```
 
-### 6. In-memory persistence — H2 per module
+All context tests now use `@MockitoBean` (`org.springframework.test.context.bean.override.mockito`);
+the deprecated `@MockBean` is gone from the suite.
+
+### 7. In-memory persistence — H2 per module
 
 Each service's `src/test/resources/application.properties` swaps Postgres for H2 so `@DataJpaTest`
 slices run with no external database:
@@ -117,9 +140,17 @@ verified at the service layer with mocks and, historically, a live concurrent-bu
 
 ## What's covered
 
-The critical paths all have tests: the IDOR header wiring, the outbox producer + relay + idempotent
-consumer, concurrency-safe `save()` + archiving, the `read`/`is_read` derived-query regression guard,
-notification ownership scoping, and the XP-multiplier resolution.
+The critical paths all have tests: the IDOR header wiring (`UserIdHeaderFilterTest`), the
+resource-server role mapping and its RFC 7807 401/403 bodies (`SecurityConfigTest`,
+`ProblemDetailAuthenticationHandlerTest`), the outbox producer + relay + idempotent consumer, the
+`ActivityLoggedEvent` wire format and both sides' `__TypeId__` mapping (`RabbitConfigTest`),
+concurrency-safe `save()` + archiving, the `read`/`is_read` derived-query regression guard,
+notification and achievement ownership scoping, and the XP-multiplier resolution.
+
+Two of these tests exist specifically to pin behaviour that was wrong before: that a level's
+progress bar follows the default curve rather than reporting a permanent 100%, and that the
+`countForActivity` precedence query still runs exactly **once** per save after progress started
+consulting it — a strict `verify` that caught a duplicated query the moment it was introduced.
 
 ## Known gap (honest inventory)
 
@@ -130,9 +161,17 @@ gamification-service against real infra — every test is per-service with mocks
 ## Try it
 
 ```bash
-mvn -f activity-service/pom.xml test
-mvn -f gamification-service/pom.xml test
-mvn -f api-gateway/pom.xml test
+mvn test                 # whole reactor, from the root — the reliable way
+mvn -pl activity-service test        # one module...
+mvn -pl activity-service -am test    # ...and -am, so its `contracts` dependency builds too
+```
+Running a single service's pom directly (`mvn -f activity-service/pom.xml test`) now needs
+`contracts` already installed in the local repo — the reactor build resolves it for you.
+
+Coverage is aggregated across modules by the `coverage-report` module, which runs jacoco's
+`report-aggregate` at the `verify` phase:
+```bash
+mvn verify     # -> coverage-report/target/site/jacoco-aggregate/index.html
 ```
 
 ## Related

@@ -1,7 +1,7 @@
 # Achievement Badges — Criteria-Driven, Idempotent Grants
 
 **Service:** `gamification-service` · **Key classes:** `Achievement`, `UserAchievement`,
-`CriteriaType`, `AchievementServiceImpl`, `UserAchievementRepository`
+`CriteriaType`, `AchievementServiceImpl`, `UserAchievementRepository`, `AchievementController`
 
 ## What it is / why it's notable
 
@@ -12,11 +12,9 @@ activity log counts — into unlockable badges, without a bespoke evaluator per 
 Adding a new badge is a data change (`INSERT INTO achievement ...`), not a code change — no new `if`
 branch, no new repository method.
 
-**Honest gap, not a hidden one:** this is fully implemented and unit-tested
-(`AchievementServiceImplTest`, `UserAchievementRepositoryTest`), but as of this writing
-`evaluateAndAward` has **no caller in production code** — no controller exposes it, and nothing invokes
-it after XP is applied. It's the backend half of the feature with the trigger not yet wired; see
-[Wiring it up](#wiring-it-up-the-natural-next-step) below for where that plug fits.
+The engine ran unreferenced for a while — fully implemented and unit-tested, but with no caller and
+no read endpoint. Both halves are now connected: `LevelTrackerServiceImpl.save` evaluates badges at
+the end of every XP application, and `GET /achievements` returns the caller's trophy case.
 
 ## How it works
 
@@ -103,32 +101,58 @@ Four seeded badges, none scoped to a specific `activityId` (`ACTIVITY_LEVEL` bad
 kind that *does* need one — aren't seeded yet, since they only make sense once specific activities
 exist).
 
-## Wiring it up (the natural next step)
+### 4. The trigger — one call site, at the end of the XP transaction
 
-The feature has no trigger today; the most natural place to add one mirrors how `LevelUpEvent` is
-already emitted — inside `LevelTrackerServiceImpl.save`'s existing `@Transactional`, or from
-`ActivityLoggedListener` right after it applies XP, both of which already have `userId` in scope:
 ```java
-// ActivityLoggedListener.onActivityLogged — after the existing levelTrackerService.save(...) call
-List<Achievement> unlocked = achievementService.evaluateAndAward(event.userId());
-// unlocked -> could feed the same LevelUpEvent-style notification table, or its own.
+// LevelTrackerServiceImpl.save, after the tracker is persisted and any LevelUpEvent written
+achievementService.evaluateAndAward(userId);
 ```
-A read endpoint (`GET /achievements/user/{id}`, backed by
-`UserAchievementRepository.findByUserIdOrderByUnlockedAtDesc`, which already exists and is tested) is
-the other missing half — this doc calls it out rather than leaving it implicit, matching this project's
-own convention of documenting known gaps instead of hiding them (see the "leveled up fires on every
-save" and "no small-population gate" notes in [Rank & Level System](rank-and-level-system.md)).
+Every criteria kind is a function of state `save` has just changed — total XP, max level, log count
+— so this is the one place where any of them can newly become true. Putting it here rather than in
+`ActivityLoggedListener` covers **both** callers of `save` (the HTTP `POST /level` and the RabbitMQ
+consumer) with a single line; hanging it off the listener would have missed the HTTP path entirely.
+
+It runs **inside the same transaction** on purpose. `grantIfAbsent` is the idempotent `ON CONFLICT`
+upsert above, so when the consumer's transaction rolls back and RabbitMQ redelivers (see
+[Event-Driven Decoupling](event-driven-decoupling.md)), re-evaluating grants nothing twice. A
+separate transaction would have risked badges surviving a rolled-back XP application.
+
+Newly unlocked badges are deliberately **not** added to `save`'s return value: its two callers want
+different things from the response, and the HTTP one already has a dedicated read endpoint. Feeding
+`unlocked` into a `LevelUpEvent`-style notification feed remains the natural follow-on.
+
+### 5. Reading them back — `GET /achievements`
+
+```java
+@GetMapping
+public ResponseEntity<List<UserAchievementDto>> findUnlocked(@RequestHeader("userId") Long userId) {
+    return ResponseEntity.ok(achievementService.findUnlocked(userId));
+}
+```
+Caller-scoped from the trusted header exactly like
+[level-up notifications](level-up-notifications.md) — there is no `/user/{id}` variant, so one user
+cannot read another's trophy case by changing a path segment. `findUnlocked` joins the grant rows to
+their definitions in **two** queries total (grants, then `findAllById` for the referenced
+definitions) rather than one lookup per badge, and skips a grant whose definition was hard-deleted
+instead of failing the whole response.
 
 ## Config
 
-No config keys. Seed data lives in `V2__insert_data.sql` (idempotent — safe on every restart). No
-gateway route exists for this feature yet, since there's no controller to route to.
+No config keys. Seed data lives in `V2__insert_data.sql` (idempotent — safe on every restart).
+`/api/achievements/**` is routed to gamification-service by `RouteConfiguration`'s
+`gamificationRoute`, so it shares that service's existing rate-limit bucket rather than needing one
+of its own.
 
 ## Try it
 
-There's no HTTP surface to curl yet (see the gap above). The executable proof today is the test suite:
 ```bash
-mvn -pl gamification-service test -Dtest=AchievementServiceImplTest,UserAchievementRepositoryTest
+# Through the gateway — userId comes from the token, never from the request
+curl http://localhost:8080/api/achievements -H "Authorization: Bearer $TOKEN"
+```
+Log enough activity to cross a seeded threshold and the badge appears here without any further call.
+The test suite is the other executable proof:
+```bash
+mvn -pl gamification-service -am test -Dtest=AchievementServiceImplTest,UserAchievementRepositoryTest,AchievementControllerTest -Dsurefire.failIfNoSpecifiedTests=false
 ```
 `AchievementServiceImplTest` covers: granting `XP_1000` on threshold-crossing, granting `LEVEL_5` off
 the max level across any single activity, `ACTIVITIES_LOGGED` correctly summing `logCount` across every
