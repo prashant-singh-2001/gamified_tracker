@@ -113,3 +113,12 @@ ranking:
   # Cadence for RankRecomputeServiceImpl's scheduled re-rank; externalized so it can be
   # tuned per environment (e.g. faster for local/demo) without a rebuild.
   recompute-interval-ms: 300000
+
+leveling:
+  default-curve:
+    # Kill switch: false restores the old "unseeded activity stays level 1 forever" behavior
+    # without a rollback. xpRequiredFor(level) = base-xp * (level - 1) ^ exponent.
+    enabled: true
+    base-xp: 100.0
+    exponent: 1.5
+    max-level: 100

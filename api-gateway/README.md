@@ -40,8 +40,9 @@ This is a **real Spring Cloud Gateway** (`spring-cloud-starter-gateway-server-we
 ## Security model (the centerpiece)
 
 - **`JwtUtil.generateToken(email, role, userId)`** — signs an HS256 token carrying `role` and the numeric `userId` (the user's `User.id`) as claims, plus a configurable expiry (`jwt.expiration`). `validateToken` parses and returns the claims. `AuthService` calls this with `user.getId()` on both register and login.
-- **`JwtFilter`** — on each request to a protected path, validates the `Bearer` token, requires the `userId` claim to be present (rejects with `401` if it's missing — e.g. a token minted before this claim existed), and sets an `Authentication` whose authority comes from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). It then **wraps the request** to force a `userId` HTTP header to the JWT's trusted value — overriding `getHeader`, `getHeaders`, *and* `getHeaderNames` (not just `getHeader`, which the Gateway's own request-forwarding doesn't consult) so a client-forged `userId` header is fully replaced, not merely shadowed, before the request is routed downstream. `shouldNotFilter` exempts `/auth/**`, swagger, `/v3/api-docs`, `/swagger-resources`, `/webjars`, and `/actuator/**`.
-- **`SecurityConfig`** — `@EnableWebSecurity`. `/auth/**`, swagger/OpenAPI paths, and `/actuator/**` are `permitAll`; `POST /api/activity` (and its trailing-slash form) is gated with `.hasRole("ADMIN")`; everything else requires authentication. `JwtFilter` runs before `UsernamePasswordAuthenticationFilter`. There is no `@PreAuthorize`/`@EnableMethodSecurity` in this service — admin gating happens at the URL/route level because routing itself is now declarative, so there's no controller method left to annotate.
+- **`SecurityConfig`** — configures Spring Security as an OAuth2 Resource Server. `JwtDecoder` validates the Bearer token, and `jwtAuthenticationConverter()` maps the JWT `role` claim to Spring Security authorities (`ROLE_USER` / `ROLE_ADMIN`).
+- **`UserIdHeaderFilter`** — runs after authentication, requires the `userId` claim to be present (rejects with `401` if it's missing), and wraps the request to inject a trusted `userId` header. It then **wraps the request** to force a `userId` HTTP header to the JWT's trusted value — overriding `getHeader`, `getHeaders`, *and* `getHeaderNames` (not just `getHeader`, which the Gateway's own request-forwarding doesn't consult) so a client-forged `userId` header is fully replaced, not merely shadowed, before the request is routed downstream. `UserIdHeaderFilter.shouldNotFilter()` exempts `/auth/**`, swagger, `/v3/api-docs`, `/swagger-resources`, `/webjars`, and `/actuator/**`.
+- **`SecurityConfig`** — `@EnableWebSecurity`. `/auth/**`, swagger/OpenAPI paths, and `/actuator/**` are `permitAll`; `POST /api/activity` (and its trailing-slash form) is gated with `.hasRole("ADMIN")`; everything else requires authentication. There is no `@PreAuthorize`/`@EnableMethodSecurity` in this service — admin gating happens at the URL/route level because routing itself is now declarative, so there's no controller method left to annotate.
 - **Why the header matters**: `activity-service` and `gamification-service` have no security of their own — they trust whatever arrives in the `userId` header on `POST /activitylog/` and `POST /level`. This filter is what makes that trust well-founded when the request comes through the Gateway (or via activity-service's internal Feign call, which forwards the same header explicitly). See [API.md § Authentication](../API.md#authentication) for the full write-vs-read trust model, including which reads are intentionally open across users.
 
 > ⚠️ `POST /auth/register` honors the requested `role`, so anyone can self-register as `ADMIN`. Acceptable for this demo; not production-safe.
@@ -158,7 +159,7 @@ Redis-backed request throttling via the Server MVC gateway's **Bucket4j** `rateL
 (`config/RateLimitConfig.java` wires a Lettuce `AsyncProxyManager<String>` over Redis; the two
 proxied routes carry the filter). See [`docs/features/rate-limiting.md`](../docs/features/rate-limiting.md) for the full design.
 
-- **Key:** the trusted `userId` header (injected by `JwtFilter`), falling back to client IP —
+- **Key:** the trusted `userId` header (injected by `UserIdHeaderFilter`), falling back to client IP —
   `config/RateLimitKeyResolver.byUserIdOrIp()`. One user hitting their limit never throttles another.
 - **Limits (token bucket, tunable via `RL_*` env / `rate-limit.*` in `application.yaml`):**
   100 req/min per proxied route; 10 req/min on `/auth/**`.
@@ -221,7 +222,7 @@ Includes `@WebMvcTest` controller tests and auth tests.
 - **`401` on every `/api/**` call** — missing/expired/invalid `Bearer` token, or a token minted before the `userId` claim existed; re-login.
 - **`403` on `POST /api/activity`** — the token's role is `USER`, not `ADMIN`. Register/login as an admin.
 - **`400` on a downstream `POST` (`/api/activitylog`, `/api/level`) when hit directly, bypassing the Gateway** — `userId` is a required header on those two endpoints; the Gateway supplies it automatically, direct calls to `:8081`/`:8082` must supply it manually (see [API.md](../API.md)).
-- **Health check:** `curl http://localhost:8080/actuator/health` — no token required (`permitAll`'d in both `SecurityConfig` and `JwtFilter`).
+- **Health check:** `curl http://localhost:8080/actuator/health` — no token required (`permitAll`'d in both `SecurityConfig` and `UserIdHeaderFilter`).
 
 ## Related docs
 

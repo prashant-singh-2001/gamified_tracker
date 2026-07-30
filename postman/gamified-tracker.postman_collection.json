@@ -18,6 +18,7 @@
           "    pm.collectionVariables.set('adminEmail', 'postman.admin.' + ts + '@example.com');",
           "    pm.collectionVariables.set('activityName', 'PostmanActivity_' + ts);",
           "    pm.collectionVariables.set('thresholdActivityId', String((ts % 100000) + 1));",
+          "    pm.collectionVariables.set('curveActivityId', String(((ts + 50000) % 100000) + 1));",
           "}"
         ]
       }
@@ -637,6 +638,10 @@
                   "});",
                   "pm.test('activityId matches', function () {",
                   "    pm.expect(String(json.activityId)).to.eql(pm.collectionVariables.get('thresholdActivityId'));",
+                  "});",
+                  "pm.test('xpForNextLevel and progressPercent are 0/100 - no threshold seeded yet for this activity (Activity Level Threshold folder runs after this one)', function () {",
+                  "    pm.expect(json.xpForNextLevel).to.eql(0);",
+                  "    pm.expect(json.progressPercent).to.eql(100.0);",
                   "});"
                 ]
               }
@@ -659,8 +664,15 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
+                  "var json = pm.response.json();",
                   "pm.test('Response is an array', function () {",
-                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "pm.test('Every row carries numeric xpForNextLevel and progressPercent', function () {",
+                  "    json.forEach(function (row) {",
+                  "        pm.expect(row.xpForNextLevel).to.be.a('number');",
+                  "        pm.expect(row.progressPercent).to.be.a('number');",
+                  "    });",
                   "});"
                 ]
               }
@@ -717,6 +729,11 @@
                   "pm.test('Contains the row written earlier', function () {",
                   "    var activityIds = json.map(function (r) { return String(r.activityId); });",
                   "    pm.expect(activityIds).to.include(pm.collectionVariables.get('thresholdActivityId'));",
+                  "});",
+                  "pm.test('That row reports 0/100 progress - no threshold seeded yet for this activity', function () {",
+                  "    var row = json.find(function (r) { return String(r.activityId) === pm.collectionVariables.get('thresholdActivityId'); });",
+                  "    pm.expect(row.xpForNextLevel).to.eql(0);",
+                  "    pm.expect(row.progressPercent).to.eql(100.0);",
                   "});"
                 ]
               }
@@ -743,10 +760,14 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
+                  "var json = pm.response.json();",
                   "pm.test('Response is a non-empty array', function () {",
-                  "    var json = pm.response.json();",
                   "    pm.expect(json).to.be.an('array');",
                   "    pm.expect(json.length).to.be.above(0);",
+                  "});",
+                  "pm.test('First row carries numeric xpForNextLevel and progressPercent', function () {",
+                  "    pm.expect(json[0].xpForNextLevel).to.be.a('number');",
+                  "    pm.expect(json[0].progressPercent).to.be.a('number');",
                   "});"
                 ]
               }
@@ -1164,7 +1185,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
-            "description": "The core IDOR regression test: authenticated as User A, but the request manually forges a 'userId' header pointing at User B. JwtFilter must overwrite this header before the request is routed downstream, so the write still lands on User A, never User B."
+            "description": "The core IDOR regression test: authenticated as User A, but the request manually forges a 'userId' header pointing at User B. UserIdHeaderFilter must overwrite this header before the request is routed downstream, so the write still lands on User A, never User B."
           },
           "event": [
             {
@@ -1270,7 +1291,7 @@
             "method": "GET",
             "header": [],
             "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
-            "description": "No Authorization header at all. Currently returns 403 (Spring Security's default anonymous-auth behavior, no custom AuthenticationEntryPoint) rather than the semantically-expected 401 - this is pre-existing and unrelated to the IDOR fix, so the test accepts either."
+            "description": "No Authorization header at all. With spring-boot-starter-oauth2-resource-server configured, Spring Security's BearerTokenAuthenticationEntryPoint handles this and returns a clean 401 with a WWW-Authenticate header - this replaced the old ambiguous 403 fallback."
           },
           "event": [
             {
@@ -1278,8 +1299,11 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status is 401 or 403 (unauthenticated request rejected)', function () {",
-                  "    pm.expect([401, 403]).to.include(pm.response.code);",
+                  "pm.test('Status is 401 (unauthenticated request rejected)', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test('WWW-Authenticate header present, identifying this as a Bearer-scheme resource server', function () {",
+                  "    pm.expect(pm.response.headers.has('WWW-Authenticate')).to.be.true;",
                   "});"
                 ]
               }
@@ -1587,8 +1611,13 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
+                  "var json = pm.response.json();",
                   "pm.test('userId in response matches the manually-supplied header', function () {",
-                  "    pm.expect(String(pm.response.json().userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "    pm.expect(String(json.userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "});",
+                  "pm.test('xpForNextLevel and progressPercent are numeric - a threshold exists for this activity by now (Activity Level Threshold folder already ran)', function () {",
+                  "    pm.expect(json.xpForNextLevel).to.be.a('number');",
+                  "    pm.expect(json.progressPercent).to.be.a('number');",
                   "});"
                 ]
               }

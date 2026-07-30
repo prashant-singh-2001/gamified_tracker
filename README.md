@@ -1,6 +1,6 @@
 # Gamified Tracker
 
-A microservices-based activity tracker with gamification. Log activities, earn XP, and level up — built with Spring Boot, Spring Cloud, and PostgreSQL.
+A microservices-based activity tracker with gamification. Log activities, earn XP, maintain streaks and level up — built with Spring Boot, Spring Cloud, and PostgreSQL.
 
 ## How it works
 
@@ -115,6 +115,7 @@ See **[API.md](API.md)** for the full endpoint reference — the Gateway also ro
 - **[docs/features/](docs/features/)** — deep-dives into the notable engineering work (JWT/IDOR, rate limiting, event-driven decoupling, concurrency-safe XP, and more), each with a diagram and the load-bearing code
 - **[postman/](postman/)** — a ready-to-import Postman collection covering every endpoint, including a dedicated IDOR-verification folder
 - Per-service READMEs: [eureka-server](eureka-server/README.md) · [api-gateway](api-gateway/README.md) · [activity-service](activity-service/README.md) · [gamification-service](gamification-service/README.md)
+- **`contracts/`** — shared library module (no `spring-boot-maven-plugin`, not a service) holding cross-service wire contracts that more than one service actually uses today, e.g. the RabbitMQ `ActivityLoggedEvent` message. Service-private DTOs stay in their own service — see [issue #23](https://github.com/prashant-singh-2001/gamified_tracker/issues/23).
 
 ## Contributing
 
@@ -122,30 +123,4 @@ Open issues are labelled by priority and type. New to the project? Start with a
 [**good first issue**](https://github.com/prashant-singh-2001/gamified_tracker/contribute).
 
 Workflow: pick an issue → branch → open a PR that references it (`Fixes #<n>`).
-
-### Pull Request Validation Workflow
-
-This repository uses **GitHub Actions** to validate Pull Requests before they are merged into `main`.
-
-1. Fork this repository.
-2. Clone your fork and create a feature branch.
-
-   ```bash
-   git checkout -b feature/my-feature
-   ```
-
-3. Implement your changes and push the branch to your fork.
-
-4. Open a Pull Request from your feature branch to the `main` branch.
-
-5. Navigate to the **Actions** tab of **your fork**.
-
-6. Select the **PR Validation** workflow.
-
-7. Click **Run workflow**.
-
-8. In the branch dropdown, select the same branch used to create the PR (e.g. `feature/my-feature`).
-
-9. Click **Run workflow**.
-
-Once the workflow completes successfully, the PR is ready for review and merge (subject to the repository's branch protection rules).
+See [CONTRIBUTING](./CONTRIBUTING.md) for more know how.

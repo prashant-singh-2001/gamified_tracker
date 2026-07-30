@@ -18,7 +18,7 @@ import java.time.LocalDateTime;
 public class Activity {
 
     @Id
-    @GeneratedValue
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     public Long id;
 
     public String name; // Study, Gaming, Work

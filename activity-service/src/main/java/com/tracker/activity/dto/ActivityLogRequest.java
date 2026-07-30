@@ -1,9 +1,6 @@
 package com.tracker.activity.dto;
 
-import jakarta.validation.constraints.Future;
-import jakarta.validation.constraints.FutureOrPresent;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.*;
 
 import java.time.LocalDateTime;
 
@@ -12,11 +9,10 @@ public record ActivityLogRequest(
         String activityName,
 
         @NotNull(message = "Start time is required")
-        @FutureOrPresent(message = "start Time should be future")
+        @PastOrPresent(message = "start Time should be past or present")
         LocalDateTime startTime,
 
         @NotNull(message = "End time is required")
-        @Future(message = "end time should be future")
         LocalDateTime endTime,
 
         String notes,

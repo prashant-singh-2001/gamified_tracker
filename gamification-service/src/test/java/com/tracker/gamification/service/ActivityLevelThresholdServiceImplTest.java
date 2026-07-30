@@ -2,6 +2,7 @@ package com.tracker.gamification.service;
 
 import com.tracker.gamification.dao.ActivityLevelThreshold;
 import com.tracker.gamification.dao.ActivityLevelThresholdId;
+import com.tracker.gamification.domain.LevelCurve;
 import com.tracker.gamification.dto.ActivityLevelThresholdDto;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.service.impl.ActivityLevelThresholdServiceImpl;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
@@ -25,6 +27,9 @@ public class ActivityLevelThresholdServiceImplTest {
 
     @Mock
     private ActivityLevelThresholdRepository activityLevelThresholdRepository;
+
+    @Spy
+    private LevelCurve levelCurve = new LevelCurve(100.0, 1.5, 100, true);
 
     @InjectMocks
     private ActivityLevelThresholdServiceImpl activityLevelThresholdService;
@@ -197,6 +202,45 @@ public class ActivityLevelThresholdServiceImplTest {
         assertNotNull(results);
         assertTrue(results.isEmpty());
         verify(activityLevelThresholdRepository).findAll();
+    }
+
+    @Test
+    @DisplayName("getEffectiveThresholds returns explicit rows when the activity has any")
+    void testGetEffectiveThresholds_returnsExplicitRowsWhenPresent() {
+        // Arrange
+        ActivityLevelThresholdId id = ActivityLevelThresholdId.builder().activityId(1L).level(2).build();
+        ActivityLevelThreshold threshold = ActivityLevelThreshold.builder().id(id).xpRequired(50.0).build();
+
+        when(activityLevelThresholdRepository.findAllForActivity(1L)).thenReturn(List.of(threshold));
+
+        // Act
+        List<ActivityLevelThresholdDto> results = activityLevelThresholdService.getEffectiveThresholds(1L, 10);
+
+        // Assert — the one explicit row, not the generated curve
+        assertEquals(1, results.size());
+        assertEquals(2, results.get(0).level());
+        assertEquals(50.0, results.get(0).xpRequired());
+        verify(activityLevelThresholdRepository).findAllForActivity(1L);
+    }
+
+    @Test
+    @DisplayName("getEffectiveThresholds returns the generated default curve when the activity has no rows")
+    void testGetEffectiveThresholds_returnsGeneratedCurveWhenAbsent() {
+        // Arrange
+        when(activityLevelThresholdRepository.findAllForActivity(2L)).thenReturn(List.of());
+
+        // Act
+        List<ActivityLevelThresholdDto> results = activityLevelThresholdService.getEffectiveThresholds(2L, 4);
+
+        // Assert — levels 1..4, curve-generated, not persisted
+        assertEquals(4, results.size());
+        assertEquals(1, results.get(0).level());
+        assertEquals(0.0, results.get(0).xpRequired());
+        assertEquals(2, results.get(1).level());
+        assertEquals(100.0, results.get(1).xpRequired());
+        assertEquals(4, results.get(3).level());
+        assertEquals(519.6152422706632, results.get(3).xpRequired(), 1e-6);
+        results.forEach(dto -> assertEquals(2L, dto.activityId()));
     }
 }
 

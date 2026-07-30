@@ -1,7 +1,7 @@
 package com.tracker.activity.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tracker.activity.messaging.ActivityLoggedEvent;
+import com.tracker.contracts.event.ActivityLoggedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

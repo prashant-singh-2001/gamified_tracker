@@ -94,6 +94,13 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Shared cross-service wire contracts (issue #23) -->
+        <dependency>
+            <groupId>com.tracker</groupId>
+            <artifactId>contracts</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
     </dependencies>
 
     <build>

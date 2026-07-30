@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.tracker</groupId>
+        <artifactId>gamified-tracker-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>contracts</artifactId>
+    <description>Cross-service wire contracts, defined once. Library module, not a service.</description>
+
+    <dependencies>
+        <!--
+            Test-only, and the ONLY dependency this module declares. A contract jar that drags
+            in a framework stops being safe for every service to depend on. Needed here solely
+            by ActivityLoggedEventWireFormatTest. Version comes from the Boot parent.
+        -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <!--
+        Deliberately NO <build> section:
+          - no spring-boot-maven-plugin: this is a library, not a service. Repackaging would
+            produce a fat jar that cannot be consumed as a dependency.
+          - no maven-compiler-plugin: the root pom's pluginManagement entry exists only to wire
+            Lombok's annotation processor, and there is no Lombok here. eureka-server omits it
+            for the same reason.
+        jacoco is still inherited from the root pom's <plugins> block and runs normally.
+    -->
+</project>

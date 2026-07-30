@@ -30,4 +30,13 @@ public class ActivityLevelThresholdController {
     public ResponseEntity<ActivityLevelThresholdDto> createActivityLevelThreshold(@Valid @RequestBody ActivityLevelThresholdDto activityLevelThresholdDto) {
         return ResponseEntity.ok(activityLevelThresholdService.saveActivityLevelThreshold(activityLevelThresholdDto));
     }
+
+    // Surfaces the default level curve fallback (issue #8) — explicit rows if the activity has
+    // any, otherwise the generated curve up to upToLevel. Not persisted either way.
+    @GetMapping("/activity/{activityId}")
+    public ResponseEntity<List<ActivityLevelThresholdDto>> getEffectiveThresholds(
+            @PathVariable("activityId") Long activityId,
+            @RequestParam(name = "upToLevel", defaultValue = "10") int upToLevel) {
+        return ResponseEntity.ok(activityLevelThresholdService.getEffectiveThresholds(activityId, upToLevel));
+    }
 }

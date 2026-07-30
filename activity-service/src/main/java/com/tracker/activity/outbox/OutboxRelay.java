@@ -1,7 +1,7 @@
 package com.tracker.activity.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tracker.activity.messaging.ActivityLoggedEvent;
+import com.tracker.contracts.event.ActivityLoggedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;

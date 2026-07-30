@@ -25,10 +25,13 @@
     </properties>
 
     <modules>
+        <module>contracts</module>
         <module>activity-service</module>
         <module>gamification-service</module>
         <module>api-gateway</module>
         <module>eureka-server</module>
+        <!-- Must come last: aggregates every module above into one coverage report. -->
+        <module>coverage-report</module>
     </modules>
 
     <!--

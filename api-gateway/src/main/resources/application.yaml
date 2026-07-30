@@ -64,8 +64,8 @@ server:
 
 # JWT custom config (you will use this in JwtUtil)
 jwt:
-  secret: ${JWT_SECRET:ma5ae3ae15600100f08d386259c14228b58cf9778e336adb61ce47835e473dad115a1138bd1ee005868199fdafec44293}
-  expiration: ${JWT_EXPIRATION:86400000}   # 1 day in ms
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:900000}   # 15 mins in ms
 
 # Logging (very useful during dev)
 logging:

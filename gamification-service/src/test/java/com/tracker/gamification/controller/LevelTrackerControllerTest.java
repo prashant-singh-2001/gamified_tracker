@@ -34,21 +34,27 @@ public class LevelTrackerControllerTest {
     @Test
     @DisplayName("Test getAllLevelTracker method")
     void testGetAllLevelTracker() throws Exception {
+        // OLD: var response1 = new LevelTrackerDto(1L, 1L, 5, 500.0, 250.0, false);
         var response1 = new LevelTrackerDto(
                 1L,
                 1L,
                 5,
                 500.0,
                 250.0,
+                250.0,
+                50.0,
                 false
         );
 
+        // OLD: var response2 = new LevelTrackerDto(2L, 2L, 3, 300.0, 150.0, false);
         var response2 = new LevelTrackerDto(
                 2L,
                 2L,
                 3,
                 300.0,
                 150.0,
+                150.0,
+                50.0,
                 false
         );
 
@@ -67,12 +73,15 @@ public class LevelTrackerControllerTest {
     @Test
     @DisplayName("Test getLevelTrackerById method")
     void testGetLevelTrackerById() throws Exception {
+        // OLD: var response = new LevelTrackerDto(1L, 1L, 5, 500.0, 250.0, false);
         var response = new LevelTrackerDto(
                 1L,
                 1L,
                 5,
                 500.0,
                 250.0,
+                250.0,
+                50.0,
                 false
         );
 
@@ -84,7 +93,9 @@ public class LevelTrackerControllerTest {
                 .andExpect(jsonPath("$.userId").value(1L))
                 .andExpect(jsonPath("$.activityId").value(1L))
                 .andExpect(jsonPath("$.level").value(5))
-                .andExpect(jsonPath("$.totalXp").value(500.0));
+                .andExpect(jsonPath("$.totalXp").value(500.0))
+                .andExpect(jsonPath("$.xpForNextLevel").value(250.0))
+                .andExpect(jsonPath("$.progressPercent").value(50.0));
 
         verify(levelTrackerService).findById(anyLong());
     }
@@ -92,12 +103,15 @@ public class LevelTrackerControllerTest {
     @Test
     @DisplayName("Test createLevelTracker method")
     void testCreateLevelTracker() throws Exception {
+        // OLD: var response = new LevelTrackerDto(1L, 1L, 1, 100.0, 100.0, false);
         var response = new LevelTrackerDto(
                 1L,
                 1L,
                 1,
                 100.0,
                 100.0,
+                100.0,
+                50.0,
                 false
         );
 
@@ -138,21 +152,27 @@ public class LevelTrackerControllerTest {
     @Test
     @DisplayName("Test getLevelTrackerByUserId method")
     void testGetLevelTrackerByUserId() throws Exception {
+        // OLD: var response1 = new LevelTrackerDto(1L, 1L, 5, 500.0, 250.0, false);
         var response1 = new LevelTrackerDto(
                 1L,
                 1L,
                 5,
                 500.0,
                 250.0,
+                250.0,
+                50.0,
                 false
         );
 
+        // OLD: var response2 = new LevelTrackerDto(1L, 2L, 3, 300.0, 150.0, false);
         var response2 = new LevelTrackerDto(
                 1L,
                 2L,
                 3,
                 300.0,
                 150.0,
+                150.0,
+                50.0,
                 false
         );
 
@@ -172,21 +192,27 @@ public class LevelTrackerControllerTest {
     @Test
     @DisplayName("Test getLevelTrackerByActivityId method")
     void testGetLevelTrackerByActivityId() throws Exception {
+        // OLD: var response1 = new LevelTrackerDto(1L, 1L, 5, 500.0, 250.0, false);
         var response1 = new LevelTrackerDto(
                 1L,
                 1L,
                 5,
                 500.0,
                 250.0,
+                250.0,
+                50.0,
                 false
         );
 
+        // OLD: var response2 = new LevelTrackerDto(2L, 1L, 3, 300.0, 150.0, false);
         var response2 = new LevelTrackerDto(
                 2L,
                 1L,
                 3,
                 300.0,
                 150.0,
+                150.0,
+                50.0,
                 false
         );
 
@@ -203,6 +229,3 @@ public class LevelTrackerControllerTest {
         verify(levelTrackerService).findByActivityId(anyLong());
     }
 }
-
-
-

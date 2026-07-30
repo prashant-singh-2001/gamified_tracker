@@ -33,7 +33,7 @@ All four services — API Gateway, Activity Service, Gamification Service, and E
 
 Only `health` and `info` are exposed (`management.endpoints.web.exposure.include: health,info`) — no `/actuator/env`, `/actuator/metrics`, etc. `management.endpoint.health.probes.enabled: true` also turns on Kubernetes-style probe groups: `/actuator/health/liveness` and `/actuator/health/readiness`.
 
-On the Gateway specifically, `/actuator/**` is `permitAll` in `SecurityConfig` and exempted in `JwtFilter.shouldNotFilter`, so no JWT is needed. Each service's own Dockerfile bakes a `HEALTHCHECK` against its `/actuator/health`, and `docker-compose.yml` gates every service's startup on its dependencies' health (`depends_on: condition: service_healthy`) in the order postgres → eureka-server → gateway → activity → gamification.
+On the Gateway specifically, `/actuator/**` is `permitAll` in `SecurityConfig` and exempted in `UserIdHeaderFilter.shouldNotFilter`, so no JWT is needed. Each service's own Dockerfile bakes a `HEALTHCHECK` against its `/actuator/health`, and `docker-compose.yml` gates every service's startup on its dependencies' health (`depends_on: condition: service_healthy`) in the order postgres → eureka-server → gateway → activity → gamification.
 
 ---
 
@@ -47,9 +47,9 @@ Authorization: Bearer <token>
 
 Tokens are signed HS256 JWTs and carry the user's `role` as a claim. The signing secret and expiry both come from config (`jwt.secret` / `jwt.expiration`, see `.env` / `JWT_SECRET` / `JWT_EXPIRATION`).
 
-`JwtFilter` grants an authority derived from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level** in `SecurityConfig` (`.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")`) rather than with a controller-level `@PreAuthorize` — there's no longer a controller to annotate, since routing is now declarative. An `ADMIN` token succeeds on `POST /api/activity`; any other role gets `403`.
+`SecurityConfig` configures the OAuth2 Resource Server, validates JWTs via the configured `JwtDecoder`, and uses a `JwtAuthenticationConverter` to derive Spring Security authorities from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level** using `.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")`. An `ADMIN` token succeeds on `POST /api/activity`; any other role receives `403 Forbidden`.
 
-**Caller identity on writes:** the JWT also carries a `userId` claim (the numeric `User.id`, set at register/login). `JwtFilter` reads it and injects a `userId` HTTP header on the request before it's routed downstream — overwriting/normalizing any `userId` header the client sent, so it can't be spoofed. `POST /api/activitylog` and `POST /api/level` derive the acting user from this trusted header rather than from the request body (see those endpoints below); the body no longer accepts a `userId` field at all.
+**Caller identity on writes:** the JWT also carries a `userId` claim (the numeric `User.id`, set at register/login). `UserIdHeaderFilter` reads it and injects a trusted `userId` HTTP header on the request before it is routed downstream — overwriting/normalizing any `userId` header the client sent, so it can't be spoofed. `POST /api/activitylog` and `POST /api/level` derive the acting user from this trusted header rather than from the request body (see those endpoints below); the body no longer accepts a `userId` field at all.
 
 ---
 

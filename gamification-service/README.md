@@ -149,7 +149,7 @@ All in one `@Transactional` method — no retry loop.
 
 The idempotent RabbitMQ consumer (new in #16 — full design: [`EVENT_DRIVEN_DECOUPLING.md`](../docs/features/event-driven-decoupling.md)):
 
-1. `@RabbitListener(queues = "${messaging.queue}")` receives an `ActivityLoggedEvent(logId, userId, activityId, xpEarned)`.
+1. `@RabbitListener(queues = "${messaging.queue}")` receives a `com.tracker.contracts.event.ActivityLoggedEvent(logId, userId, activityId, xpEarned)` — defined once in the shared `contracts` module, not duplicated per service (see [issue #23](https://github.com/prashant-singh-2001/gamified_tracker/issues/23)).
 2. **Dedup check:** `processedEventRepository.existsById(logId)` — if already processed, log and return (no-op).
 3. **Dedup guard, written first:** `processedEventRepository.save(new ProcessedEvent(logId, now()))`. If a concurrent duplicate already inserted this key, this throws, the `@Transactional` method rolls back, and the message is redelivered — landing on step 2 as a no-op next time.
 4. Calls the **same** `LevelTrackerServiceImpl.save(userId, dto)` the HTTP `POST /level` endpoint uses — no business-logic duplication.
@@ -172,7 +172,7 @@ Reads standard env vars (see root [`.env.example`](../.env.example)):
 ## Inter-service dependencies
 
 - **Calls:** nothing over HTTP/Feign (leaf service for outbound calls).
-- **Consumes from:** RabbitMQ (`ActivityLoggedEvent`, queue `gamification.activity-logged.q`) — published by activity-service's outbox relay.
+- **Consumes from:** RabbitMQ (`com.tracker.contracts.event.ActivityLoggedEvent`, queue `gamification.activity-logged.q`) — published by activity-service's outbox relay.
 - **Called by:** activity-service (indirectly, via RabbitMQ) and directly via `POST /level` (api-gateway or `:8082`).
 - **Infra:** Eureka (registration), PostgreSQL (persistence), RabbitMQ (messaging, incl. DLQ).
 
