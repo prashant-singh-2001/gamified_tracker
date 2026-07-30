@@ -237,6 +237,17 @@ Create an activity log (computes duration + XP bonus, saves the log, and writes 
 #### `GET /activitylog/user/{id}`
 List all activity logs for a user.
 
+### Analytics
+
+#### `GET /activitylog/analytics/user/{userId}/category-summary`
+Aggregates activity logs for a user grouped by category (`STUDY`, `WORK`, `GAMING`, `CHORES`, `HEALTH`, `OTHER`). Returns JSON array containing `category`, `totalDurationMinutes`, `totalXpEarned`, and `totalSessions`.
+
+#### `GET /activitylog/analytics/user/{userId}/xp-over-time?days=7`
+Calculates daily XP earned and total active minutes for the specified window (default 7 days). Returns JSON array of daily breakdown objects.
+
+#### `GET /activitylog/analytics/user/{userId}/weekly-report`
+Generates a comprehensive weekly report comparing current week vs previous week XP, percentage change, total active minutes, top category, and a 7-day daily breakdown.
+
 ---
 
 ## Gamification Service (port 8082) — internal
