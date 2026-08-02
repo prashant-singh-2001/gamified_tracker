@@ -32,6 +32,14 @@ public class DurationOutlierEvaluationService {
     private final SessionIntegrityProperties sessionIntegrityProperties;
 
     public DurationOutlierDetector.Verdict evaluate(Long userId, Category category, long durationMinutes) {
+        // Closes the self-consistency hole: a user who cold-start-seeds their baseline at 1440
+        // min/session, or ratchets up in small steps, is never an outlier against their OWN
+        // history (the detector below is one-sided on the user's baseline). This check is
+        // independent of it, so checked first and short-circuits without touching the database.
+        if (durationMinutes > sessionIntegrityProperties.absoluteFlagMinutes()) {
+            return new DurationOutlierDetector.Verdict(true, 0.0, 0.0, 0, DurationOutlierDetector.Basis.ABSOLUTE_THRESHOLD);
+        }
+
         Pageable window = PageRequest.of(0, sessionIntegrityProperties.baselineWindow());
 
         List<Long> baseline = activityLogRepository.findRecentDurationsForUserAndCategory(

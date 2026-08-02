@@ -16,3 +16,8 @@ CREATE INDEX idx_activity_log_review_status
 -- and activity_log currently has only idx_activity_log_user_id on (user_id) alone.
 CREATE INDEX idx_activity_log_user_id_created_at
     ON activity_log (user_id, created_at);
+
+-- Session integrity (#67): serves the per-user-per-day aggregate cap
+-- (WHERE user_id = ? AND start_time BETWEEN ? AND ?).
+CREATE INDEX idx_activity_log_user_id_start_time
+    ON activity_log (user_id, start_time);

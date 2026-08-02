@@ -14,5 +14,12 @@ public record SessionIntegrityProperties(
         double modifiedZThreshold,
         int minSamples,
         int baselineWindow,
-        double relativeFactor) {
+        double relativeFactor,
+        // Flags regardless of the user's own baseline, closing the self-consistency hole where a
+        // consistently implausible user (cold-start seeding, or ratcheting up in small steps) is
+        // never an outlier against their own history. Checked first, before either baseline query.
+        long absoluteFlagMinutes,
+        // A calendar day physically contains 1440 minutes, so a legitimate daily total across all
+        // of a user's sessions cannot exceed it — closes aggregate farming via many small sessions.
+        long maxDailyMinutes) {
 }
