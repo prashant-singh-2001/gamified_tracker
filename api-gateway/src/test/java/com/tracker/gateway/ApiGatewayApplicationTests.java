@@ -6,7 +6,7 @@ import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest
 class ApiGatewayApplicationTests {
@@ -15,16 +15,16 @@ class ApiGatewayApplicationTests {
 	// (bucket4jRedisConnection eagerly calls RedisClient.connect(...)), which does not
 	// resolve outside docker-compose. Mocking them here keeps this context-load test
 	// hermetic without needing a real/embedded Redis.
-	@MockBean
+	@MockitoBean
 	private RedisClient redisClient;
 
-	@MockBean
+	@MockitoBean
 	private StatefulRedisConnection<String, byte[]> redisConnection;
 
-	@MockBean
+	@MockitoBean
 	private AsyncProxyManager<String> asyncProxyManager;
 
-	@MockBean
+	@MockitoBean
 	private ProxyManager<String> proxyManager;
 
 	@Test

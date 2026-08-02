@@ -50,6 +50,11 @@ public class LevelTrackerServiceImplTest {
     @Spy
     private LevelCurve levelCurve = new LevelCurve(100.0, 1.5, 100, true);
 
+    // save() evaluates badges at the end of the XP transaction; stubbed here so these tests stay
+    // about levelling. AchievementServiceImplTest covers the evaluation itself.
+    @Mock
+    private AchievementService achievementService;
+
     @InjectMocks
     private LevelTrackerServiceImpl levelTrackerService;
 
@@ -805,6 +810,102 @@ public class LevelTrackerServiceImplTest {
         assertTrue(result.leveledUp());
         verify(levelUpEventRepository).save(argThat((LevelUpEvent e) ->
                 e.getOldLevel() == 3 && e.getNewLevel() == 4));
+    }
+
+    @Test
+    @DisplayName("progress is computed from the default curve when the activity has no threshold rows")
+    void save_progressFollowsCurve_whenActivityHasNoThresholdRows() {
+        // Arrange — no explicit rows at all, so both the level AND the progress bar must come from
+        // the curve. Previously progress fell through to MAX_LEVEL here, so an activity that was
+        // still climbing reported "100% complete, 0 XP to go" while its level kept rising.
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 300.0);
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+
+        // 300 XP -> level 3 (xpRequiredFor(3) == 282.84...), banked 17.157... into the level-3 band
+        LevelTracker curveResolvedTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L)
+                .level(3).totalXp(300.0).currentLevelXp(17.15728752538094)
+                .build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(activityLevelThresholdRepository.countForActivity(1L)).thenReturn(0L);
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(curveResolvedTracker);
+
+        // Act
+        LevelTrackerDto result = levelTrackerService.save(1L, request);
+
+        // Assert — band is xpRequiredFor(3)=282.84 .. xpRequiredFor(4)=519.62
+        // remaining = 519.615... - 300 = 219.62; percent = 17.157... / 236.772... * 100 = 7.25
+        assertEquals(219.62, result.xpForNextLevel());
+        assertEquals(7.25, result.progressPercent());
+    }
+
+    @Test
+    @DisplayName("progress stays MAX_LEVEL when the activity's own ladder is exhausted")
+    void save_progressIsMaxLevel_whenExplicitLadderExhausted() {
+        // Arrange — the activity HAS explicit rows but none above the new total. Precedence says an
+        // activity with any row never blends in curve levels, so progress must NOT fall back to the
+        // curve here either: it is genuinely topped out on its own data.
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 300.0);
+
+        ActivityLevelThresholdId reachedId = ActivityLevelThresholdId.builder().activityId(1L).level(2).build();
+        ActivityLevelThreshold reached = ActivityLevelThreshold.builder().id(reachedId).xpRequired(200.0).build();
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+        LevelTracker toppedOutTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).level(2).totalXp(300.0).currentLevelXp(100.0).build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of(reached));
+        when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(toppedOutTracker);
+
+        // Act
+        LevelTrackerDto result = levelTrackerService.save(1L, request);
+
+        // Assert
+        assertEquals(0.0, result.xpForNextLevel());
+        assertEquals(100.0, result.progressPercent());
+    }
+
+    @Test
+    @DisplayName("save evaluates achievements for the caller after XP is applied")
+    void save_evaluatesAchievements() {
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 50.0);
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L).userId(7L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+        LevelTracker savedTracker = LevelTracker.builder()
+                .id(1L).userId(7L).activityId(1L).level(1).totalXp(50.0).currentLevelXp(50.0).build();
+
+        when(levelTrackerRepository.insertIfAbsent(7L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(7L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(50.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(50.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(activityLevelThresholdRepository.countForActivity(1L)).thenReturn(0L);
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(savedTracker);
+
+        // Act
+        levelTrackerService.save(7L, request);
+
+        // Assert — evaluated for the trusted caller id, not the tracker's activity or anything else
+        verify(achievementService).evaluateAndAward(7L);
     }
 }
 

@@ -5,13 +5,17 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(AuthController.class)
@@ -21,10 +25,10 @@ public class AuthControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private AuthService authService;
 
-    @MockBean
+    @MockitoBean
     private JwtUtil jwtUtil;
 
     // AuthRateLimitFilter is a @Component Filter, so @WebMvcTest's web-layer slicing
@@ -33,7 +37,7 @@ public class AuthControllerTest {
     // (backed by Redis), which isn't part of this slice - mock the filter bean itself
     // rather than its Bucket4j dependencies, mirroring how JwtFilter's only dependency
     // (JwtUtil, above) is already satisfied.
-    @MockBean
+    @MockitoBean
     private AuthRateLimitFilter authRateLimitFilter;
 
     @Test
@@ -60,6 +64,62 @@ public class AuthControllerTest {
                         .accept(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isOk());
+    }
+
+    // The constraints on LoginRequest/RegisterRequest predate the validation starter, so until it
+    // was added these bodies were all accepted and reached AuthService.
+
+    @Test
+    void register_withoutRole_defaultsToUserInsteadOfFailingValidation() throws Exception {
+        when(authService.register(any())).thenReturn("token123");
+
+        // role omitted deliberately: AuthService defaults it, so the constraint must not require it
+        String json = "{\"firstName\":\"John\",\"lastName\":\"Doe\",\"email\":\"john@example.com\",\"password\":\"pass123\"}";
+
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void register_rejectsBlankFieldsWithJoinedFieldMessages() throws Exception {
+        String json = "{\"firstName\":\"\",\"lastName\":\"\",\"email\":\"not-an-email\",\"password\":\"\"}";
+
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(containsString("firstName is required")))
+                .andExpect(jsonPath("$.detail").value(containsString("password is required")));
+
+        verify(authService, never()).register(any());
+    }
+
+    @Test
+    void login_rejectsMalformedEmailBeforeReachingTheService() throws Exception {
+        String json = "{\"email\":\"nope\",\"password\":\"pass123\"}";
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isBadRequest());
+
+        verify(authService, never()).login(any());
+    }
+
+    @Test
+    void login_rejectsMissingEmail() throws Exception {
+        // @Email alone passes on null — @NotBlank is what makes this a 400.
+        String json = "{\"password\":\"pass123\"}";
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(containsString("email is required")));
+
+        verify(authService, never()).login(any());
     }
 }
 

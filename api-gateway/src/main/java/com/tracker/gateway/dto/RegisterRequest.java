@@ -10,11 +10,15 @@ public record RegisterRequest(
         String firstName,
         @NotBlank(message = "lastName is required")
         String lastName,
+        @NotBlank(message = "email is required")
         @Email(message = "email should be formatted and required")
         String email,
         @NotBlank(message = "password is required")
         String password,
-        @NotNull(message = "Role is required")
+        // Deliberately NOT @NotNull: AuthService.register defaults a null role to Role.USER, so
+        // requiring it here would have rejected the ordinary "register me as a normal user" call
+        // the moment @Valid started being enforced. Optional in the constraint, defaulted in the
+        // service — one rule, stated once.
         Role role
 ) {
 }

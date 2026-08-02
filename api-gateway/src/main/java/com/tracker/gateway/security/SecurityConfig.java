@@ -29,9 +29,12 @@ import java.util.List;
 public class SecurityConfig {
 
     private final UserIdHeaderFilter userIdHeaderFilter;
+    private final ProblemDetailAuthenticationHandler problemDetailAuthenticationHandler;
 
-    public SecurityConfig(UserIdHeaderFilter userIdHeaderFilter) {
+    public SecurityConfig(UserIdHeaderFilter userIdHeaderFilter,
+                          ProblemDetailAuthenticationHandler problemDetailAuthenticationHandler) {
         this.userIdHeaderFilter = userIdHeaderFilter;
+        this.problemDetailAuthenticationHandler = problemDetailAuthenticationHandler;
     }
 
     @Bean
@@ -49,7 +52,14 @@ public class SecurityConfig {
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt
                                 .decoder(jwtDecoder)
-                                .jwtAuthenticationConverter(jwtAuthenticationConverter)))
+                                .jwtAuthenticationConverter(jwtAuthenticationConverter))
+                        // RFC 7807 bodies for the 401/403 Spring Security writes itself, so these
+                        // two match every other error this API returns.
+                        .authenticationEntryPoint(problemDetailAuthenticationHandler)
+                        .accessDeniedHandler(problemDetailAuthenticationHandler))
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(problemDetailAuthenticationHandler)
+                        .accessDeniedHandler(problemDetailAuthenticationHandler))
                 .addFilterAfter(userIdHeaderFilter, BearerTokenAuthenticationFilter.class);
 
         return http.build();

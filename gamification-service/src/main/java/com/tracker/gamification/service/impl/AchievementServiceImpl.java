@@ -2,6 +2,8 @@ package com.tracker.gamification.service.impl;
 
 import com.tracker.gamification.dao.Achievement;
 import com.tracker.gamification.dao.LevelTracker;
+import com.tracker.gamification.dao.UserAchievement;
+import com.tracker.gamification.dto.UserAchievementDto;
 import com.tracker.gamification.repository.AchievementRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.UserAchievementRepository;
@@ -13,6 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @AllArgsConstructor
@@ -58,5 +62,40 @@ public class AchievementServiceImpl implements AchievementService {
         }
 
         return newlyUnlocked;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserAchievementDto> findUnlocked(Long userId) {
+        var unlocked = userAchievementRepository.findByUserIdOrderByUnlockedAtDesc(userId);
+        if (unlocked.isEmpty()) {
+            return List.of();
+        }
+
+        // One query for every referenced definition rather than one per row.
+        var definitionsById = achievementRepository.findAllById(
+                        unlocked.stream().map(UserAchievement::getAchievementId).toList())
+                .stream()
+                .collect(Collectors.toMap(Achievement::getId, Function.identity()));
+
+        return unlocked.stream()
+                .map(ua -> {
+                    Achievement definition = definitionsById.get(ua.getAchievementId());
+                    if (definition == null) {
+                        // Granted row whose definition was hard-deleted; skip rather than NPE.
+                        return null;
+                    }
+                    return new UserAchievementDto(
+                            definition.getId(),
+                            definition.getCode(),
+                            definition.getName(),
+                            definition.getDescription(),
+                            definition.getCriteriaType() == null ? null : definition.getCriteriaType().name(),
+                            definition.getThreshold(),
+                            definition.getActivityId(),
+                            ua.getUnlockedAt());
+                })
+                .filter(Objects::nonNull)
+                .toList();
     }
 }

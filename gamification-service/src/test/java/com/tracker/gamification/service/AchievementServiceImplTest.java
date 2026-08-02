@@ -3,6 +3,8 @@ package com.tracker.gamification.service;
 import com.tracker.gamification.dao.Achievement;
 import com.tracker.gamification.dao.CriteriaType;
 import com.tracker.gamification.dao.LevelTracker;
+import com.tracker.gamification.dao.UserAchievement;
+import com.tracker.gamification.dto.UserAchievementDto;
 import com.tracker.gamification.repository.AchievementRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.UserAchievementRepository;
@@ -14,10 +16,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -189,5 +193,69 @@ public class AchievementServiceImplTest {
         // Assert
         assertEquals(1, unlocked.size());
         assertEquals("ACTIVITY_2_MASTER", unlocked.get(0).getCode());
+    }
+
+    @Test
+    @DisplayName("findUnlocked joins grant rows to their definitions, newest first")
+    void findUnlocked_joinsDefinitions() {
+        // Arrange
+        LocalDateTime newest = LocalDateTime.of(2026, 7, 30, 12, 0);
+        LocalDateTime older = LocalDateTime.of(2026, 7, 29, 12, 0);
+
+        when(userAchievementRepository.findByUserIdOrderByUnlockedAtDesc(1L)).thenReturn(List.of(
+                userAchievement(1L, 5L, newest),
+                userAchievement(1L, 6L, older)
+        ));
+        when(achievementRepository.findAllById(List.of(5L, 6L))).thenReturn(List.of(
+                achievement(5L, "XP_1000", CriteriaType.TOTAL_XP, 1000, null),
+                achievement(6L, "ACTIVITY_2_MASTER", CriteriaType.ACTIVITY_LEVEL, 3, 2L)
+        ));
+
+        // Act
+        List<UserAchievementDto> result = achievementService.findUnlocked(1L);
+
+        // Assert — repository ordering is preserved, and the definition fields are joined on
+        assertEquals(2, result.size());
+        assertEquals("XP_1000", result.get(0).code());
+        assertEquals("TOTAL_XP", result.get(0).criteriaType());
+        assertEquals(1000L, result.get(0).threshold());
+        assertEquals(newest, result.get(0).unlockedAt());
+        assertEquals("ACTIVITY_2_MASTER", result.get(1).code());
+        assertEquals(2L, result.get(1).activityId());
+    }
+
+    @Test
+    @DisplayName("findUnlocked short-circuits without a definition lookup when nothing is unlocked")
+    void findUnlocked_emptyWithoutSecondQuery() {
+        when(userAchievementRepository.findByUserIdOrderByUnlockedAtDesc(1L)).thenReturn(List.of());
+
+        assertTrue(achievementService.findUnlocked(1L).isEmpty());
+        verify(achievementRepository, never()).findAllById(any());
+    }
+
+    @Test
+    @DisplayName("findUnlocked skips a grant whose definition no longer exists rather than failing")
+    void findUnlocked_skipsMissingDefinition() {
+        // A hard-deleted achievement row would otherwise NPE the whole trophy case.
+        when(userAchievementRepository.findByUserIdOrderByUnlockedAtDesc(1L)).thenReturn(List.of(
+                userAchievement(1L, 5L, LocalDateTime.of(2026, 7, 30, 12, 0)),
+                userAchievement(1L, 99L, LocalDateTime.of(2026, 7, 29, 12, 0))
+        ));
+        when(achievementRepository.findAllById(List.of(5L, 99L))).thenReturn(List.of(
+                achievement(5L, "XP_1000", CriteriaType.TOTAL_XP, 1000, null)
+        ));
+
+        List<UserAchievementDto> result = achievementService.findUnlocked(1L);
+
+        assertEquals(1, result.size());
+        assertEquals("XP_1000", result.get(0).code());
+    }
+
+    private UserAchievement userAchievement(Long userId, Long achievementId, LocalDateTime unlockedAt) {
+        UserAchievement ua = new UserAchievement();
+        ua.setUserId(userId);
+        ua.setAchievementId(achievementId);
+        ua.setUnlockedAt(unlockedAt);
+        return ua;
     }
 }

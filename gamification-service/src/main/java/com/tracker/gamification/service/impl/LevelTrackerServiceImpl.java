@@ -13,6 +13,7 @@ import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.LevelUpEventRepository;
+import com.tracker.gamification.service.AchievementService;
 import com.tracker.gamification.service.LevelTrackerService;
 import com.tracker.gamification.service.OverallLevelService;
 import lombok.AllArgsConstructor;
@@ -38,6 +39,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final LevelUpEventRepository levelUpEventRepository;
     private final OverallLevelService overallLevelService;
     private final LevelCurve levelCurve;
+    private final AchievementService achievementService;
 
     @Override
     public List<LevelTrackerDto> findByUserId(Long userId) {
@@ -104,7 +106,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
 
         tracker.setTotalXp(tracker.getTotalXp() + dto.xp());
         tracker.setLogCount(tracker.getLogCount() + 1);
-        applyLevel(tracker);
+        boolean onDefaultCurve = applyLevel(tracker);
 
         // leveledUp is a real comparison against the level BEFORE this save, not a side effect of
         // which LevelOutcome branch resolveLevel took — see resolveLevel's comment for why those
@@ -126,7 +128,15 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
                     .build());
         }
 
-        return mapToDto(saved, leveledUp, progressFor(saved));
+        // Badge criteria are all functions of state this method just changed (total XP, max level,
+        // log count), so this is the one place where every one of them can newly become true.
+        // Runs in the same transaction on purpose: grantIfAbsent is an idempotent ON CONFLICT
+        // upsert, so a rollback-and-redeliver from the RabbitMQ path re-evaluates safely rather
+        // than double-granting. Awards are read back via GET /achievements, not returned here —
+        // the HTTP and RabbitMQ callers of save() want different things from the response.
+        achievementService.evaluateAndAward(userId);
+
+        return mapToDto(saved, leveledUp, progressFor(saved, onDefaultCurve));
     }
 
     private void archivePreviousState(LevelTracker tracker) {
@@ -142,16 +152,27 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         );
     }
 
-    private void applyLevel(LevelTracker levelTracker) {
-        LevelOutcome outcome = resolveLevel(levelTracker.getActivityId(), levelTracker.getTotalXp());
+    /**
+     * Whether this activity resolves levels from the default curve rather than its own explicit
+     * rows. Carried alongside the outcome so save() can reuse the answer for progress instead of
+     * asking the database the same question twice in one transaction.
+     */
+    private record LevelResolution(LevelOutcome outcome, boolean usedDefaultCurve) {
+    }
 
-        if (outcome instanceof LevelOutcome.LeveledUp up) {
+    /** @return true when the level came from the default curve. */
+    private boolean applyLevel(LevelTracker levelTracker) {
+        LevelResolution resolution = resolveLevel(levelTracker.getActivityId(), levelTracker.getTotalXp());
+
+        if (resolution.outcome() instanceof LevelOutcome.LeveledUp up) {
             levelTracker.setLevel(up.level());
             levelTracker.setCurrentLevelXp(up.currentLevelXp());
-        } else if (outcome instanceof LevelOutcome.InProgress ip) {
+        } else if (resolution.outcome() instanceof LevelOutcome.InProgress ip) {
             levelTracker.setLevel(ip.level());
             levelTracker.setCurrentLevelXp(ip.currentLevelXp());
         }
+
+        return resolution.usedDefaultCurve();
     }
 
     // NOTE on meaning: LeveledUp here means "an explicit activity_level_threshold row was reached" —
@@ -159,32 +180,32 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     // comparing against the level captured before mutation). InProgress covers everything else:
     // genuinely below the activity's own next explicit threshold, OR resolved via the default curve
     // when the activity has no explicit rows at all.
-    private LevelOutcome resolveLevel(Long activityId, double totalXp) {
+    private LevelResolution resolveLevel(Long activityId, double totalXp) {
         var reachedLevels = activityLevelThresholdRepository.findReachedLevels(
                 activityId, totalXp, PageRequest.of(0, 1));
 
         if (!reachedLevels.isEmpty()) {
             var reached = reachedLevels.get(0);
-            return new LevelOutcome.LeveledUp(
+            return new LevelResolution(new LevelOutcome.LeveledUp(
                     reached.getId().getLevel(),
-                    totalXp - reached.getXpRequired());
+                    totalXp - reached.getXpRequired()), false);
         }
 
         // No explicit threshold reached. Only fall back to the default curve when this activity has
         // NO threshold rows at all — an activity with even one row must stay on its own data forever,
         // never blend in formula-derived levels (see the precedence decision in
-        // DEFAULT_LEVEL_CURVE_TODO.md). countForActivity is queried only on this empty-result path,
+        // RANK_AND_LEVEL_SYSTEM_TODO.md). countForActivity is queried only on this empty-result path,
         // so the common explicit-threshold case costs exactly the same number of queries as before.
         boolean useDefaultCurve = levelCurve.isEnabled()
                 && activityLevelThresholdRepository.countForActivity(activityId) == 0;
 
         if (useDefaultCurve) {
-            return new LevelOutcome.InProgress(
+            return new LevelResolution(new LevelOutcome.InProgress(
                     levelCurve.levelFor(totalXp),
-                    levelCurve.currentLevelXpFor(totalXp));
+                    levelCurve.currentLevelXpFor(totalXp)), true);
         }
 
-        return new LevelOutcome.InProgress(1, totalXp);
+        return new LevelResolution(new LevelOutcome.InProgress(1, totalXp), false);
     }
 
     // OLD:
@@ -223,14 +244,33 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
      * Single-row progress lookup — used by findById/findById-via-mapToDto and save().
      */
     private LevelProgress progressFor(LevelTracker tracker) {
+        return progressFor(tracker, null);
+    }
+
+    /**
+     * @param knownCurveUsage non-null when the caller has already established whether this activity
+     *                        is on the default curve (save() learns it from applyLevel). Passing it
+     *                        keeps the query count identical to before progress became curve-aware;
+     *                        null means "work it out", for the read paths that never resolved a level.
+     */
+    private LevelProgress progressFor(LevelTracker tracker, Boolean knownCurveUsage) {
         var nextLevels = activityLevelThresholdRepository.findNextLevels(
                 tracker.getActivityId(), tracker.getTotalXp(), PageRequest.of(0, 1));
 
-        if (nextLevels.isEmpty()) {
-            return LevelProgress.MAX_LEVEL;
+        if (!nextLevels.isEmpty()) {
+            return LevelProgress.toward(tracker.getTotalXp(), tracker.getCurrentLevelXp(),
+                    nextLevels.get(0).getXpRequired());
         }
-        return LevelProgress.toward(tracker.getTotalXp(), tracker.getCurrentLevelXp(),
-                nextLevels.get(0).getXpRequired());
+
+        // No explicit next row. Mirror resolveLevel's precedence exactly: fall back to the curve
+        // only when the activity has NO explicit rows at all, so progress and level always agree
+        // about which ladder this activity is on.
+        boolean useDefaultCurve = knownCurveUsage != null
+                ? knownCurveUsage
+                : levelCurve.isEnabled()
+                        && activityLevelThresholdRepository.countForActivity(tracker.getActivityId()) == 0;
+
+        return useDefaultCurve ? curveProgress(tracker) : LevelProgress.MAX_LEVEL;
     }
 
     /**
@@ -261,8 +301,34 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
                 .filter(t -> t.getXpRequired() > tracker.getTotalXp())
                 .min(Comparator.comparingInt(t -> t.getId().getLevel()));
 
-        return next.map(t -> LevelProgress.toward(tracker.getTotalXp(), tracker.getCurrentLevelXp(), t.getXpRequired()))
-                .orElse(LevelProgress.MAX_LEVEL);
+        if (next.isPresent()) {
+            return LevelProgress.toward(tracker.getTotalXp(), tracker.getCurrentLevelXp(),
+                    next.get().getXpRequired());
+        }
+
+        // `thresholds` is this activity's COMPLETE row set (findAllForActivities), so empty here
+        // means the same thing countForActivity checks in progressFor — no extra query needed,
+        // which is the whole point of the batched path.
+        boolean useDefaultCurve = levelCurve.isEnabled() && thresholds.isEmpty();
+
+        return useDefaultCurve ? curveProgress(tracker) : LevelProgress.MAX_LEVEL;
+    }
+
+    /**
+     * Progress toward the next level on the default curve, for activities with no explicit
+     * thresholds. The curve's band boundaries are xpRequiredFor(level) .. xpRequiredFor(level + 1),
+     * which is exactly the pair LevelProgress.toward expects.
+     */
+    private LevelProgress curveProgress(LevelTracker tracker) {
+        Integer current = tracker.getLevel();
+        int level = current == null ? 1 : current;
+
+        if (level >= levelCurve.getMaxLevel()) {
+            return LevelProgress.MAX_LEVEL;
+        }
+
+        return LevelProgress.toward(tracker.getTotalXp(), tracker.getCurrentLevelXp(),
+                levelCurve.xpRequiredFor(level + 1));
     }
 
     // Not yet called from save() — wiring live overall-level feedback into the XP transaction

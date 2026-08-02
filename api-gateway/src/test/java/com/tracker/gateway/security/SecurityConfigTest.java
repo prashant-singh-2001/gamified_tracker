@@ -29,12 +29,15 @@ class SecurityConfigTest {
     @Mock
     private JwtDecoder jwtDecoder;
 
+    @Mock
+    private ProblemDetailAuthenticationHandler problemDetailAuthenticationHandler;
+
     private SecurityConfig securityConfig;
 
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        securityConfig = new SecurityConfig(userIdHeaderFilter);
+        securityConfig = new SecurityConfig(userIdHeaderFilter, problemDetailAuthenticationHandler);
     }
 
     @Test

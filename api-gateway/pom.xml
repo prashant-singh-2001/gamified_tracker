@@ -63,6 +63,15 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <!--
+            LoginRequest/RegisterRequest have carried jakarta.validation constraints since they were
+            written, but without this starter there is no validator on the classpath, so @Valid was
+            a no-op and the annotations were dead. Matches activity-service/gamification-service.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
         <!-- was scope=compile with no optional flag; normalized to match every
              other service's devtools declaration (runtime + optional) -->
         <dependency>

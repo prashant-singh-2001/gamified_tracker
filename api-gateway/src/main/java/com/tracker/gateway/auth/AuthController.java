@@ -2,13 +2,11 @@ package com.tracker.gateway.auth;
 
 import com.tracker.gateway.dto.LoginRequest;
 import com.tracker.gateway.dto.RegisterRequest;
-import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.Map;
 
 @RestController
 @RequestMapping("/auth")
@@ -21,12 +19,12 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public String register(@RequestBody RegisterRequest req) {
+    public String register(@Valid @RequestBody RegisterRequest req) {
         return authService.register(req);
     }
 
     @PostMapping("/login")
-    public String login(@RequestBody LoginRequest req) {
+    public String login(@Valid @RequestBody LoginRequest req) {
         return authService.login(req);
     }
 }
