@@ -114,3 +114,8 @@ session-integrity:
   min-samples: ${SESSION_INTEGRITY_MIN_SAMPLES:10}
   baseline-window: ${SESSION_INTEGRITY_BASELINE_WINDOW:100}
   relative-factor: ${SESSION_INTEGRITY_RELATIVE_FACTOR:3.0}
+  # Flags regardless of the user's own baseline -- closes the self-consistency hole where a
+  # consistently implausible user is never an outlier against their own history.
+  absolute-flag-minutes: ${SESSION_INTEGRITY_ABSOLUTE_FLAG_MINUTES:600}
+  # A day physically contains 1440 minutes; closes aggregate farming via many small sessions.
+  max-daily-minutes: ${SESSION_INTEGRITY_MAX_DAILY_MINUTES:1440}

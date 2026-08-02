@@ -57,10 +57,11 @@ public class ActivityLogServiceImplTest {
     private ActivityStreakRepository activityStreakRepository;
     @Mock
     private DurationOutlierEvaluationService durationOutlierEvaluationService;
-    // 1440 min (24h) cap, matching the documented default; outlier detection on but the mocked
-    // evaluation service abstains (INSUFFICIENT_SAMPLES) by default -- see below.
+    // 1440 min (24h) session cap and 1440 min daily cap, matching the documented defaults;
+    // absoluteFlagMinutes=600 also matches the documented default. Outlier detection on but the
+    // mocked evaluation service abstains (INSUFFICIENT_SAMPLES) by default -- see below.
     private final SessionIntegrityProperties sessionIntegrityProperties =
-            new SessionIntegrityProperties(true, 1440, 3.5, 10, 100, 3.0);
+            new SessionIntegrityProperties(true, 1440, 3.5, 10, 100, 3.0, 600, 1440);
     private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
     private ActivityLogServiceImpl activityLogService;
 
@@ -79,6 +80,11 @@ public class ActivityLogServiceImplTest {
         // lenient() because read-only tests never reach the layer-2 evaluation at all.
         lenient().when(durationOutlierEvaluationService.evaluate(any(), any(), anyLong()))
                 .thenReturn(new DurationOutlierDetector.Verdict(false, 0.0, 0.0, 0, DurationOutlierDetector.Basis.INSUFFICIENT_SAMPLES));
+        // Default daily running total: an empty day (no prior logs today), so the layer-1b
+        // aggregate cap never trips for tests that don't care about it. lenient() for the same
+        // reason as above -- read-only tests never reach the daily-cap check at all.
+        lenient().when(activityLogRepository.sumDurationForUserOnDay(any(), any(), any(), any()))
+                .thenReturn(0L);
     }
 
     private void stubActivityAndSave(Activity activity, Long generatedId) {
@@ -522,7 +528,7 @@ public class ActivityLogServiceImplTest {
                 .xpMultiplier(1.5).active(true).build();
         stubActivityAndSave(active, 202L);
 
-        SessionIntegrityProperties disabled = new SessionIntegrityProperties(false, 1440, 3.5, 10, 100, 3.0);
+        SessionIntegrityProperties disabled = new SessionIntegrityProperties(false, 1440, 3.5, 10, 100, 3.0, 600, 1440);
         ActivityLogServiceImpl serviceWithDetectionOff = new ActivityLogServiceImpl(
                 activityLogRepository, activityRepository, outboxEventRepository, objectMapper,
                 activityStreakRepository, durationOutlierEvaluationService, disabled, meterRegistry);
@@ -533,5 +539,84 @@ public class ActivityLogServiceImplTest {
         assertEquals(ReviewStatus.CLEARED, body.reviewStatus());
         verifyNoInteractions(durationOutlierEvaluationService);
         verify(outboxEventRepository, times(1)).save(any(OutboxEvent.class));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Issue #67 follow-on — layer 1b: per-user-per-day aggregate cap
+    // ──────────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("a session that would push the day's running total over maxDailyMinutes is rejected with no log, streak, or outbox row written")
+    void addActivityLog_overDailyCap_isRejected() {
+        LocalDateTime start = LocalDateTime.now();
+        // 100 minutes on top of an existing 1400-minute day = 1500 > the 1440-minute daily cap
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(100), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        when(activityRepository.findByName("Study")).thenReturn(Optional.of(active));
+        when(activityLogRepository.sumDurationForUserOnDay(eq(1L), any(), any(), any())).thenReturn(1400L);
+
+        assertThrows(ImplausibleSessionException.class,
+                () -> activityLogService.addActivityLogResponseResponseEntity(1L, request));
+
+        verify(activityLogRepository, never()).save(any());
+        verifyNoInteractions(outboxEventRepository);
+        verifyNoInteractions(activityStreakRepository);
+    }
+
+    @Test
+    @DisplayName("a session that brings the day's running total to EXACTLY maxDailyMinutes is accepted (not strictly greater)")
+    void addActivityLog_exactlyAtDailyCap_isAccepted() {
+        LocalDateTime start = LocalDateTime.now();
+        // 60 minutes on top of an existing 1380-minute day = exactly 1440, the daily cap
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(60), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        stubActivityAndSave(active, 203L);
+        when(activityLogRepository.sumDurationForUserOnDay(eq(1L), any(), any(), any())).thenReturn(1380L);
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(1L, request).getBody();
+
+        assertNotNull(body);
+        verify(activityLogRepository).save(any(ActivityLog.class));
+    }
+
+    @Test
+    @DisplayName("a day with no prior logs (repository returns null for SUM) is treated as a zero running total, not a failure")
+    void addActivityLog_noPriorLogsToday_nullSumTreatedAsZero() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(30), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        stubActivityAndSave(active, 204L);
+        when(activityLogRepository.sumDurationForUserOnDay(eq(1L), any(), any(), any())).thenReturn(null);
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(1L, request).getBody();
+
+        assertNotNull(body);
+        verify(activityLogRepository).save(any(ActivityLog.class));
+    }
+
+    @Test
+    @DisplayName("the service trusts the repository's daily total verbatim -- a FLAGGED/REJECTED log excluded from that sum does not consume the budget")
+    void addActivityLog_dailyTotalTrustsRepositoryExclusionOfFlaggedAndRejected() {
+        LocalDateTime start = LocalDateTime.now();
+        // Would total 1400 min if a same-day FLAGGED 900-min log were (wrongly) counted alongside
+        // this 500-min request; the repository's countedStatuses filter is what keeps the number
+        // the service receives here at 60 (a separate CLEARED log only) -- verified independently
+        // in ActivityLogRepositoryTest. This test documents the service accepts that number as-is.
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(500), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        stubActivityAndSave(active, 205L);
+        when(activityLogRepository.sumDurationForUserOnDay(eq(1L), any(), any(), any())).thenReturn(60L);
+
+        assertDoesNotThrow(() -> activityLogService.addActivityLogResponseResponseEntity(1L, request));
+
+        verify(activityLogRepository).save(any(ActivityLog.class));
     }
 }
