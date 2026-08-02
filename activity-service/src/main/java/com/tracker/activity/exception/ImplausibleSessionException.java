@@ -11,4 +11,12 @@ public class ImplausibleSessionException extends RuntimeException {
         super("Session duration of " + durationMinutes + " minutes exceeds the maximum allowed "
                 + maxDurationMinutes + " minutes.");
     }
+
+    // Layer 1b (#67): per-user-per-day aggregate cap. A day physically contains 1440 minutes,
+    // so a legitimate running total across all of a user's sessions cannot exceed it.
+    public ImplausibleSessionException(long candidateDurationMinutes, long runningDailyTotalMinutes, long maxDailyMinutes) {
+        super("Logging this " + candidateDurationMinutes + "-minute session would bring today's total to "
+                + runningDailyTotalMinutes + " minutes, exceeding the maximum allowed " + maxDailyMinutes
+                + " minutes per day.");
+    }
 }

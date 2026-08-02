@@ -9,12 +9,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.domain.PageRequest;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 // @Autowired field injection, matching the repo's other @DataJpaTest classes.
@@ -43,6 +46,22 @@ public class ActivityLogRepositoryTest {
                 .durationMinutes(durationMinutes)
                 .xpEarned(durationMinutes * 1.0)
                 .createdAt(createdAt)
+                .reviewStatus(status)
+                .build());
+    }
+
+    // Session integrity (#67) daily-cap tests need direct control over startTime (the sum query's
+    // filter column), independent of durationMinutes -- unlike log() above, which derives
+    // startTime from createdAt and duration together.
+    private ActivityLog logAtStartTime(Long userId, Activity activity, long durationMinutes, ReviewStatus status, LocalDateTime startTime) {
+        return activityLogRepository.save(ActivityLog.builder()
+                .userId(userId)
+                .activity(activity)
+                .startTime(startTime)
+                .endTime(startTime.plusMinutes(durationMinutes))
+                .durationMinutes(durationMinutes)
+                .xpEarned(durationMinutes * 1.0)
+                .createdAt(startTime.plusMinutes(durationMinutes))
                 .reviewStatus(status)
                 .build());
     }
@@ -133,5 +152,62 @@ public class ActivityLogRepositoryTest {
 
         assertEquals(List.of(newer.getId(), older.getId()),
                 queue.stream().map(ActivityLog::getId).toList());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Issue #67 follow-on — sumDurationForUserOnDay (layer 1b, per-user-per-day cap)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void sumDurationForUserOnDay_returnsNullWhenTheUserHasNoLogsThatDay() {
+        LocalDate day = LocalDate.now().minusDays(5);
+
+        Long total = activityLogRepository.sumDurationForUserOnDay(
+                99L, day.atStartOfDay(), day.atTime(LocalTime.MAX), BASELINE_STATUSES);
+
+        assertNull(total);
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("daily sum excludes FLAGGED/REJECTED rows — a withheld or denied log must not consume the day's budget")
+    void sumDurationForUserOnDay_excludesFlaggedAndRejected() {
+        Activity study = activity("Study", Category.STUDY);
+        LocalDate day = LocalDate.now().minusDays(5);
+        logAtStartTime(1L, study, 60L, ReviewStatus.CLEARED, day.atTime(1, 0));
+        logAtStartTime(1L, study, 900L, ReviewStatus.FLAGGED, day.atTime(3, 0));
+        logAtStartTime(1L, study, 900L, ReviewStatus.REJECTED, day.atTime(5, 0));
+        logAtStartTime(1L, study, 70L, ReviewStatus.APPROVED, day.atTime(7, 0));
+
+        Long total = activityLogRepository.sumDurationForUserOnDay(
+                1L, day.atStartOfDay(), day.atTime(LocalTime.MAX), BASELINE_STATUSES);
+
+        assertEquals(130L, total); // 60 (CLEARED) + 70 (APPROVED); the two 900s are excluded
+    }
+
+    @Test
+    void sumDurationForUserOnDay_doesNotLeakAnotherUsersMinutes() {
+        Activity study = activity("Study", Category.STUDY);
+        LocalDate day = LocalDate.now().minusDays(5);
+        logAtStartTime(1L, study, 60L, ReviewStatus.CLEARED, day.atTime(1, 0));
+        logAtStartTime(2L, study, 999L, ReviewStatus.CLEARED, day.atTime(2, 0));
+
+        Long total = activityLogRepository.sumDurationForUserOnDay(
+                1L, day.atStartOfDay(), day.atTime(LocalTime.MAX), BASELINE_STATUSES);
+
+        assertEquals(60L, total);
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("a log just after midnight on the next day does not count toward the prior day's total (day-boundary regression test)")
+    void sumDurationForUserOnDay_respectsTheDayBoundary() {
+        Activity study = activity("Study", Category.STUDY);
+        LocalDate day = LocalDate.now().minusDays(5);
+        logAtStartTime(1L, study, 60L, ReviewStatus.CLEARED, day.atTime(23, 59));
+        logAtStartTime(1L, study, 999L, ReviewStatus.CLEARED, day.plusDays(1).atTime(0, 1)); // next day
+
+        Long total = activityLogRepository.sumDurationForUserOnDay(
+                1L, day.atStartOfDay(), day.atTime(LocalTime.MAX), BASELINE_STATUSES);
+
+        assertEquals(60L, total);
     }
 }

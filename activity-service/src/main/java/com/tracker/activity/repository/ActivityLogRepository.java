@@ -54,6 +54,24 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, Long> 
 
     // Drives the admin review queue.
     List<ActivityLog> findByReviewStatusOrderByCreatedAtDesc(ReviewStatus status, Pageable page);
+
+    // Session integrity (#67): per-user-per-day aggregate cap. A withheld (FLAGGED) or denied
+    // (REJECTED) log must not consume the user's legitimate daily budget, so countedStatuses
+    // mirrors the baseline-exclusion rationale above: {CLEARED, APPROVED} only.
+    // Range predicate on startTime rather than a date-truncation function: date_trunc is
+    // Postgres-only and would die on the H2 test slice; a plain >= / <= comparison is
+    // dialect-neutral. Boxed Long return: SUM(...) is SQL NULL for an empty group, and a
+    // primitive getter would throw on unboxing (same convention as UserXpProjection).
+    @Query("""
+            SELECT SUM(l.durationMinutes) FROM ActivityLog l
+            WHERE l.userId = :userId
+              AND l.startTime >= :dayStart AND l.startTime <= :dayEnd
+              AND l.reviewStatus IN :countedStatuses
+            """)
+    Long sumDurationForUserOnDay(@Param("userId") Long userId,
+                                  @Param("dayStart") LocalDateTime dayStart,
+                                  @Param("dayEnd") LocalDateTime dayEnd,
+                                  @Param("countedStatuses") Collection<ReviewStatus> countedStatuses);
     List<ActivityLog> findByUserIdAndStartTimeBetween(Long userId, LocalDateTime start, LocalDateTime end);
     List<ActivityLog> findByUserIdAndStartTimeAfter(Long userId, LocalDateTime after);
 }

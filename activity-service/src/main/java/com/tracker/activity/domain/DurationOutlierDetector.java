@@ -81,7 +81,8 @@ public class DurationOutlierDetector {
         INSUFFICIENT_SAMPLES,
         MODIFIED_Z_SCORE,
         MEAN_AD_FALLBACK,
-        RELATIVE_FALLBACK
+        RELATIVE_FALLBACK,
+        ABSOLUTE_THRESHOLD
     }
 
     public record Verdict(boolean flagged, double modifiedZScore, double median, int sampleSize, Basis basis) {
