@@ -104,3 +104,13 @@ messaging:
 outbox:
   relay:
     delay-ms: 2000
+
+# Session integrity (issue #67). Layer 1 (hard cap) always applies; layer 2 (statistical
+# quarantine) is gated by outlier-detection-enabled.
+session-integrity:
+  outlier-detection-enabled: ${SESSION_INTEGRITY_OUTLIER_ENABLED:true}
+  max-duration-minutes: ${SESSION_INTEGRITY_MAX_DURATION:1440}
+  modified-z-threshold: ${SESSION_INTEGRITY_Z_THRESHOLD:3.5}
+  min-samples: ${SESSION_INTEGRITY_MIN_SAMPLES:10}
+  baseline-window: ${SESSION_INTEGRITY_BASELINE_WINDOW:100}
+  relative-factor: ${SESSION_INTEGRITY_RELATIVE_FACTOR:3.0}

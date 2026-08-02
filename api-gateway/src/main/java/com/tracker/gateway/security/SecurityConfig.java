@@ -45,6 +45,10 @@ public class SecurityConfig {
                                 "/v3/api-docs", "/v3/api-docs/**", "/swagger-resources/**", "/actuator/**")
                         .permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")
+                        // Session integrity (#67): the review queue and its approve/reject
+                        // transitions are maintainer-only. activity-service has no Spring Security
+                        // of its own, so this is the only place it can be enforced.
+                        .requestMatchers("/api/activitylog/review/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt

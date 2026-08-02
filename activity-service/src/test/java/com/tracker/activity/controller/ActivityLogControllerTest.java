@@ -2,6 +2,7 @@ package com.tracker.activity.controller;
 
 import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.dao.ReviewStatus;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.service.ActivityLogService;
@@ -60,7 +61,8 @@ public class ActivityLogControllerTest {
                 1.0,
                 false,
                 0,
-                1.0
+                1.0,
+                ReviewStatus.CLEARED
         );
 
         //Act
@@ -120,7 +122,8 @@ public class ActivityLogControllerTest {
                 1.0,
                 false,
                 0,
-                1.0
+                1.0,
+                ReviewStatus.CLEARED
         );
 
         //Act
@@ -185,7 +188,8 @@ public class ActivityLogControllerTest {
                 1.0,
                 false,
                 0,
-                1.0
+                1.0,
+                ReviewStatus.CLEARED
         );
         ActivityLogResponse log2 = new ActivityLogResponse(
                 2L,
@@ -201,7 +205,8 @@ public class ActivityLogControllerTest {
                 1.0,
                 false,
                 0,
-                1.0
+                1.0,
+                ReviewStatus.CLEARED
         );
         ActivityLogResponse log3 = new ActivityLogResponse(
                 3L,
@@ -217,7 +222,8 @@ public class ActivityLogControllerTest {
                 1.0,
                 false,
                 0,
-                1.0
+                1.0,
+                ReviewStatus.CLEARED
         );
 
         //Act

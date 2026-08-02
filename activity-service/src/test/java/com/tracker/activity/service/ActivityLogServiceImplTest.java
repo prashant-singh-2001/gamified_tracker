@@ -1,21 +1,28 @@
 package com.tracker.activity.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tracker.activity.config.SessionIntegrityProperties;
 import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.ActivityStreak;
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.dao.ReviewStatus;
+import com.tracker.activity.domain.DurationOutlierDetector;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.exception.ActivityNotFoundException;
+import com.tracker.activity.exception.ImplausibleSessionException;
 import com.tracker.activity.exception.InvalidTimeRangeException;
 import com.tracker.activity.outbox.OutboxEvent;
 import com.tracker.activity.outbox.OutboxEventRepository;
 import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.repository.ActivityRepository;
 import com.tracker.activity.repository.ActivityStreakRepository;
+import com.tracker.activity.service.DurationOutlierEvaluationService;
 import com.tracker.activity.service.impl.ActivityLogServiceImpl;
 import com.tracker.contracts.event.ActivityLoggedEvent;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -48,18 +55,30 @@ public class ActivityLogServiceImplTest {
     private OutboxEventRepository outboxEventRepository;
     @Mock
     private ActivityStreakRepository activityStreakRepository;
+    @Mock
+    private DurationOutlierEvaluationService durationOutlierEvaluationService;
+    // 1440 min (24h) cap, matching the documented default; outlier detection on but the mocked
+    // evaluation service abstains (INSUFFICIENT_SAMPLES) by default -- see below.
+    private final SessionIntegrityProperties sessionIntegrityProperties =
+            new SessionIntegrityProperties(true, 1440, 3.5, 10, 100, 3.0);
+    private final MeterRegistry meterRegistry = new SimpleMeterRegistry();
     private ActivityLogServiceImpl activityLogService;
 
     @BeforeEach
     void setUp() {
         activityLogService = new ActivityLogServiceImpl(
-                activityLogRepository, activityRepository, outboxEventRepository, objectMapper, activityStreakRepository);
+                activityLogRepository, activityRepository, outboxEventRepository, objectMapper,
+                activityStreakRepository, durationOutlierEvaluationService, sessionIntegrityProperties, meterRegistry);
         // Default streak behaviour for the add-log tests that don't care about streaks: save
         // echoes its argument so applyStreak returns a non-null streak. lenient() because the
         // read-only tests never reach this path. findByUserIdAndActivityId returns Optional.empty()
         // via Mockito's default, so those tests see a fresh streak (currentStreak=1, x1.0 -> XP unchanged).
         lenient().when(activityStreakRepository.save(any(ActivityStreak.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        // Default verdict for tests that don't care about outlier detection: never flags.
+        // lenient() because read-only tests never reach the layer-2 evaluation at all.
+        lenient().when(durationOutlierEvaluationService.evaluate(any(), any(), anyLong()))
+                .thenReturn(new DurationOutlierDetector.Verdict(false, 0.0, 0.0, 0, DurationOutlierDetector.Basis.INSUFFICIENT_SAMPLES));
     }
 
     private void stubActivityAndSave(Activity activity, Long generatedId) {
@@ -423,5 +442,96 @@ public class ActivityLogServiceImplTest {
         assertEquals(200, response.getStatusCode().value());
         verify(activityLogRepository).save(any());
         verify(outboxEventRepository).save(any(OutboxEvent.class));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Issue #67 — Session integrity: hard cap (layer 1) + statistical quarantine (layer 2)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("a session over the hard cap is rejected with no log, streak, or outbox row written")
+    void addActivityLog_overHardCap_isRejected() {
+        LocalDateTime start = LocalDateTime.now();
+        // 1441 minutes > the 1440-minute cap configured in this test's SessionIntegrityProperties
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(1441), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        when(activityRepository.findByName("Study")).thenReturn(Optional.of(active));
+
+        assertThrows(ImplausibleSessionException.class,
+                () -> activityLogService.addActivityLogResponseResponseEntity(1L, request));
+
+        verifyNoInteractions(activityLogRepository);
+        verifyNoInteractions(outboxEventRepository);
+        verifyNoInteractions(activityStreakRepository);
+    }
+
+    @Test
+    @DisplayName("a statistically flagged log is persisted as FLAGGED but writes NO outbox row (XP withheld)")
+    void addActivityLog_flaggedByOutlierDetection_withholdsXp() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(60), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        stubActivityAndSave(active, 200L);
+
+        when(durationOutlierEvaluationService.evaluate(eq(1L), eq(Category.STUDY), eq(60L)))
+                .thenReturn(new DurationOutlierDetector.Verdict(true, 9.9, 30.0, 15, DurationOutlierDetector.Basis.MODIFIED_Z_SCORE));
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(1L, request).getBody();
+
+        assertNotNull(body);
+        assertEquals(ReviewStatus.FLAGGED, body.reviewStatus());
+        // the single most important assertion in this change: XP must actually be withheld
+        verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
+        // the log itself is still persisted (visible to the user, pending review)
+        verify(activityLogRepository).save(any(ActivityLog.class));
+
+        ArgumentCaptor<ActivityLog> captor = ArgumentCaptor.forClass(ActivityLog.class);
+        verify(activityLogRepository).save(captor.capture());
+        assertEquals(ReviewStatus.FLAGGED, captor.getValue().getReviewStatus());
+    }
+
+    @Test
+    @DisplayName("a clean (non-flagged) log is persisted as CLEARED and writes exactly one outbox row")
+    void addActivityLog_notFlagged_isClearedAndWritesOutbox() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(30), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        stubActivityAndSave(active, 201L);
+        // default stub from setUp() returns flagged=false
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(1L, request).getBody();
+
+        assertNotNull(body);
+        assertEquals(ReviewStatus.CLEARED, body.reviewStatus());
+        verify(outboxEventRepository, times(1)).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    @DisplayName("the outlier-detection kill switch (outlierDetectionEnabled=false) never flags, and the evaluation service is never consulted")
+    void addActivityLog_outlierDetectionDisabled_neverFlags() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(30), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        stubActivityAndSave(active, 202L);
+
+        SessionIntegrityProperties disabled = new SessionIntegrityProperties(false, 1440, 3.5, 10, 100, 3.0);
+        ActivityLogServiceImpl serviceWithDetectionOff = new ActivityLogServiceImpl(
+                activityLogRepository, activityRepository, outboxEventRepository, objectMapper,
+                activityStreakRepository, durationOutlierEvaluationService, disabled, meterRegistry);
+
+        ActivityLogResponse body = serviceWithDetectionOff.addActivityLogResponseResponseEntity(1L, request).getBody();
+
+        assertNotNull(body);
+        assertEquals(ReviewStatus.CLEARED, body.reviewStatus());
+        verifyNoInteractions(durationOutlierEvaluationService);
+        verify(outboxEventRepository, times(1)).save(any(OutboxEvent.class));
     }
 }

@@ -13,6 +13,7 @@ public record ActivityLogRequest(
         LocalDateTime startTime,
 
         @NotNull(message = "End time is required")
+        @PastOrPresent(message = "end Time should be past or present")
         LocalDateTime endTime,
 
         String notes,
