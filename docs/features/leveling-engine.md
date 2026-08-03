@@ -193,23 +193,12 @@ level 5 resets the bar to 0%, it doesn't show 80%. Both outputs are clamped and 
 decimals, and `span <= 0` (nothing further to reach) returns the `MAX_LEVEL` constant —
 `(0.0, 100.0)` — rather than dividing by zero.
 
-Progress follows the same precedence as the level itself. When there is no explicit next-threshold
-row, `progressFor` falls back to the curve's band — `xpRequiredFor(level)` to
-`xpRequiredFor(level + 1)` — but only for activities with no explicit rows at all. An activity that
-has exhausted its *own* ladder genuinely is topped out and still reports `MAX_LEVEL`:
-
-```java
-boolean useDefaultCurve = knownCurveUsage != null
-        ? knownCurveUsage
-        : levelCurve.isEnabled()
-                && activityLevelThresholdRepository.countForActivity(tracker.getActivityId()) == 0;
-```
-The `knownCurveUsage` parameter is the interesting bit. `save()` has already established which
-ladder the activity is on — `applyLevel` returns it, carried out of `resolveLevel` on a
-`LevelResolution` record — so passing it down means the write path answers "does this activity have
-explicit rows?" with **one** query per save, not two. The read paths (`findById`, list endpoints)
-pass `null` and let it work the answer out; the batched `mapAll` path needs no query at all, since
-an empty threshold list for an activity already *is* that answer.
+**Honest gap:** progress is resolved from explicit threshold rows only (`findNextLevels`). An
+activity running on the default curve has no next-threshold row, so it reports `MAX_LEVEL` —
+`xpForNextLevel: 0, progressPercent: 100` — even though its *level* advances correctly via the
+curve. The level and the progress bar therefore disagree for unseeded activities; making
+`progressFor` curve-aware (mirroring the same "explicit rows win, no blending" precedence
+`resolveLevel` uses above) is the outstanding piece.
 
 ## Config
 

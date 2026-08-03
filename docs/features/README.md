@@ -1,6 +1,6 @@
 # Feature Docs — Gamified Tracker
 
-Fourteen standalone deep-dives into the notable engineering work in this codebase — each one covers
+Sixteen standalone deep-dives into the notable engineering work in this codebase — each one covers
 what the feature is, why it's worth a second look, how it actually works (with a diagram and the
 load-bearing code), its config, and a way to try it live. Verified against the current source at
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
@@ -33,15 +33,16 @@ territory.
 | Doc | What it demonstrates |
 |---|---|
 | [Rank & Level System](rank-and-level-system.md) | A scheduled batch computing percentile-based tiers into a materialized snapshot, so every read stays O(1) instead of re-ranking on every request |
-| [Achievement Badges](achievement-badges.md) | A criteria-driven rules engine (one `switch`, four badge kinds, all data-defined) reusing the codebase's idempotent-upsert grant pattern, evaluated inside the XP transaction so both callers of `save` are covered by one line |
+| [Achievement Badges](achievement-badges.md) | A criteria-driven rules engine (one `switch`, four badge kinds, all data-defined) reusing the codebase's idempotent-upsert grant pattern — and an honest gap: implemented, tested, not yet wired to a trigger |
 | [Streaks](streaks.md) | A consecutive-day gap-state-machine multiplier that stacks onto XP, entirely inside the producing service — the consuming service needed zero changes |
+| [Analytics](analytics.md) | In-memory stream aggregation over raw activity logs (category summaries, a zero-filled daily XP timeline, a single-query weekly report) — deliberately sidesteps this repo's H2/Postgres SQL-portability trap |
 
 ## Cross-Cutting & Quality
 
 | Doc | What it demonstrates |
 |---|---|
-| [Error Handling](error-handling.md) | One RFC 7807 `ProblemDetail` contract across every service — including the 401/403 Spring Security writes itself — no-user-enumeration login errors, and byte-for-byte pass-through through the gateway |
-| [Testing Strategy](testing-strategy.md) | A sliced test pyramid (47 classes, 217 tests) with `InOrder`/`ArgumentCaptor` side-effect verification, a serialized-shape wire-contract guard, and `@MockitoBean`-hermetic context tests |
+| [Error Handling](error-handling.md) | One RFC 7807 `ProblemDetail` contract across every service, no-user-enumeration login errors, and byte-for-byte pass-through through the gateway — plus an honest gap: Spring Security's own 401/403 aren't in that shape yet |
+| [Testing Strategy](testing-strategy.md) | A sliced test pyramid (48 classes) with `InOrder`/`ArgumentCaptor` side-effect verification and a serialized-shape wire-contract guard |
 
 ## Platform
 
@@ -49,6 +50,7 @@ territory.
 |---|---|
 | [Service Discovery, Health Orchestration & Containerization](observability-and-discovery.md) | Eureka + Actuator health checks driving Docker Compose's dependency-ordered startup, layered multi-stage non-root Docker builds, and per-service Swagger |
 | [Distributed Tracing & Metrics](distributed-tracing.md) | Zipkin + Prometheus + Grafana across all services — one trace follows a request through the RabbitMQ hop, all via config and auto-instrumentation |
+| [Config Server](config-server.md) | A Spring Cloud Config Server that runs, serves configuration correctly, and is honestly documented as Phase 1 — no service imports it yet |
 
 ## Feature → service → key class
 
@@ -64,20 +66,23 @@ territory.
 | Rank & level system | gamification-service | `service/impl/RankRecomputeServiceImpl.java` |
 | Achievement badges | gamification-service | `service/impl/AchievementServiceImpl.java` |
 | Streaks | activity-service | `service/impl/ActivityLogServiceImpl.java` (`applyStreak`) |
+| Analytics | activity-service | `service/impl/AnalyticsServiceImpl.java` |
 | Error handling | all three web services | `exception/GlobalExceptionHandler.java` |
-| Testing strategy | all five modules | `*/src/test/...` |
+| Testing strategy | all six modules | `*/src/test/...` |
 | Discovery, health & containers | all four services | `docker-compose.yml`, `*/Dockerfile` |
 | Distributed tracing & metrics | all four services | `docker-compose.yml`, `prometheus.yml`, `grafana/` |
+| Config server (Phase 1) | config-service | `ConfigServiceApplication.java`, `config-repo/*.yaml` |
 
 ## Module map
 
-Five Maven modules under the root reactor, plus a coverage aggregator:
+Six Maven modules under the root reactor, plus a coverage aggregator:
 
 | Module | Kind | Port |
 |---|---|---|
 | `api-gateway` | Spring Cloud Gateway (Server MVC) — auth, rate limiting, routing | 8080 |
-| `activity-service` | Activities, activity logs, streaks, outbox producer | 8081 |
+| `activity-service` | Activities, activity logs, streaks, analytics, outbox producer | 8081 |
 | `gamification-service` | XP, levels, ranks, badges, notifications, event consumer | 8082 |
 | `eureka-server` | Service discovery | 8761 |
+| `config-service` | Spring Cloud Config Server — Phase 1, not yet consumed by any service | 8888 |
 | `contracts` | Library, not a service — cross-service wire contracts | — |
 | `coverage-report` | Build-only module: jacoco `report-aggregate` across the above | — |

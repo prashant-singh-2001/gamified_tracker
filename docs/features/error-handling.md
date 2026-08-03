@@ -101,15 +101,6 @@ The constraints live on the request records — e.g. `ActivityLogRequest` requir
 one previously read `@FutureOrPresent`, which had the rule exactly backwards: you log time you have
 already spent, so a start time in the future is the invalid case.
 
-**api-gateway — the no-enumeration 401 above, plus the same validation 400.** Its DTOs had carried
-`@Email`/`@NotBlank` constraints for a long time, but the service had no `spring-boot-starter-validation`
-on the classpath and no `@Valid` on the controller — so there was no validator to run them and the
-annotations were dead. All three parts (starter, `@Valid`, handler) are now present, which is what
-makes them enforceable. One constraint was deleted rather than enforced: `RegisterRequest.role` was
-annotated `@NotNull` while `AuthService.register` explicitly defaults a null role to `Role.USER` —
-turning validation on with that annotation intact would have started rejecting ordinary
-registrations. The service's default is the real rule, so the annotation went.
-
 **gamification-service — 404 + a validation 400:**
 ```java
 @RestControllerAdvice
@@ -124,32 +115,27 @@ public class GlobalExceptionHandler {
     }
 }
 ```
-The `400` path is subtle: `LevelTrackerRequestDTO`'s compact constructor throws on `xp < 0` **during
-JSON deserialization**, which Spring surfaces as `HttpMessageNotReadableException` — so a negative-XP
-body is rejected with a clean `400` before it ever reaches the service, rather than blowing up as an
-unhandled `500`.
+`LevelTrackerRequestDTO`'s `xp` field carries a `@PositiveOrZero` constraint, and
+`LevelTrackerController` validates the body with `@Valid` — but gamification-service's
+`GlobalExceptionHandler` above has no `@ExceptionHandler(MethodArgumentNotValidException.class)`.
+A negative `xp` therefore never reaches this service's own `ProblemDetail` handling at all: the
+validation failure falls straight through to Spring's own default error handling instead, unlike
+activity-service (which does have that handler — see above). The DTO's leading comment block
+preserves an older, now-dead approach — a compact constructor that threw `IllegalArgumentException`
+on `xp < 0` during deserialization — commented out in favor of the declarative constraint; don't
+mistake the comment for live behavior.
 
-### Even the errors Spring Security writes itself
+### The errors Spring Security writes itself
 
 The `401` for a missing/expired/malformed bearer token and the `403` for a caller without the
 required role never reach a `@RestControllerAdvice` — they are written by the filter chain, before
-any controller exists. Spring's defaults (`BearerTokenAuthenticationEntryPoint` /
-`BearerTokenAccessDeniedHandler`) send an **empty body** and put the reason in a
-`WWW-Authenticate` header. That is valid OAuth 2.0, but it would mean a client needs a second error
-format for exactly two status codes. `ProblemDetailAuthenticationHandler` is registered as both the
-entry point and the access-denied handler, so those two get RFC 7807 bodies like everything else —
-while still emitting `WWW-Authenticate`, so spec-compliant clients keep working:
-
-```java
-.oauth2ResourceServer(oauth2 -> oauth2
-        .jwt(...)
-        .authenticationEntryPoint(problemDetailAuthenticationHandler)
-        .accessDeniedHandler(problemDetailAuthenticationHandler))
-```
-The `401` detail is deliberately generic — `"Authentication required or token is invalid"`. The
-underlying exception can distinguish "expired" from "bad signature" from "malformed", but echoing
-that back tells an attacker which half of a forged token to fix. Same instinct as the login
-message above.
+any controller exists. This resource server has not customized either: Spring's defaults
+(`BearerTokenAuthenticationEntryPoint` / the default `AccessDeniedHandler`) apply, which send an
+**empty body** and put the failure reason in a `WWW-Authenticate` header rather than a
+`ProblemDetail`. That's valid OAuth 2.0 behavior, but it means these two status codes are the one
+place a client parses a different error shape than everywhere else in this API — a gap worth
+closing by registering a custom `AuthenticationEntryPoint`/`AccessDeniedHandler` on
+`oauth2ResourceServer(...)`, not yet done.
 
 ### The response shape
 
@@ -174,10 +160,17 @@ untouched rather than re-serializing it. `GET /api/activity/does-not-exist` and
 
 - Only the exceptions above are advised; anything else falls through to Spring's defaults — there's
   no catch-all `@ExceptionHandler(Exception.class)`.
-- The negative-XP check on `LevelTrackerRequestDTO` is enforced twice over: once by the compact
-  constructor (during deserialization, surfacing as `HttpMessageNotReadableException`) and once by
-  `@PositiveOrZero`. The two produce different messages for the same bad input depending on which
-  fires first. Harmless, but it is duplication worth collapsing.
+- Bean Validation is wired in **activity-service only** — its `MethodArgumentNotValidException`
+  handler is the one shown above. gamification-service's DTOs carry constraints
+  (`@Valid`/`@PositiveOrZero` on `LevelTrackerRequestDTO`, for one) but its `GlobalExceptionHandler`
+  has no handler for the exception those constraints throw, so violations don't get this service's
+  `ProblemDetail` treatment. api-gateway's `LoginRequest`/`RegisterRequest` carry constraints too
+  (`@Email`, `@NotBlank`, `@NotNull` on `RegisterRequest.role`) but the controller has no `@Valid`
+  and the service has no validation starter on its classpath at all — those annotations are
+  currently inert. Note if that ever gets wired up: `RegisterRequest.role` is `@NotNull` while
+  `AuthService.register` explicitly defaults a null role to `Role.USER` — turning validation on
+  without removing that annotation would start rejecting the ordinary "register with no role"
+  request that default exists to support.
 
 ## Try it
 
@@ -186,7 +179,10 @@ curl -i http://localhost:8080/api/activity/DoesNotExist -H "Authorization: Beare
 curl -i -X POST http://localhost:8080/auth/login -H "Content-Type: application/json" \
   -d '{"email":"nobody@example.com","password":"x"}'                                         # 401 "Invalid email or password"
 curl -i -X POST http://localhost:8080/api/level -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" -d '{"activityId":1,"xp":-5}'                           # 400 "Invalid request body"
+  -H "Content-Type: application/json" -d '{"activityId":1,"xp":-5}'
+# -> 400, but NOT this service's ProblemDetail shape — @Valid's MethodArgumentNotValidException
+#    has no handler in gamification-service's GlobalExceptionHandler, so it falls through to
+#    Spring's own default error handling (see "Known edges" above)
 
 # Soft-delete an activity, then try to log against it -> 409, no XP or streak side effects
 curl -i -X POST http://localhost:8080/api/activitylog -H "Authorization: Bearer $TOKEN" \

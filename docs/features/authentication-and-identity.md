@@ -109,10 +109,10 @@ public JwtAuthenticationConverter jwtAuthenticationConverter() {
 ```
 
 What this buys over the old filter, for free: signature *and* `exp`/`nbf` validation, correct
-`401` vs `403` semantics, and a `JwtAuthenticationToken` whose `getToken()` exposes every claim to
-anything downstream in the chain. The bodies of those two responses are overridden by
-`ProblemDetailAuthenticationHandler` so they match the project's RFC 7807 shape instead of the
-empty-body-plus-header default — see [Error Handling](error-handling.md). The one project-specific bit — mapping the custom `role` claim onto Spring's
+`401` vs `403` semantics via `BearerTokenAuthenticationEntryPoint` (including the
+`WWW-Authenticate` header, with the failure reason for malformed or expired tokens), and a
+`JwtAuthenticationToken` whose `getToken()` exposes every claim to anything downstream in the
+chain. The one project-specific bit — mapping the custom `role` claim onto Spring's
 `ROLE_`-prefixed authority — is the converter above, and it defaults to `USER` rather than failing
 when the claim is absent.
 
@@ -241,8 +241,8 @@ curl -X POST http://localhost:8080/api/level -H "Authorization: Bearer $TOKEN" \
 # -> XP still lands on Ada's real id, never 999
 ```
 The Postman collection's **Security – IDOR Verification** folder automates exactly this test.
-Tokens now expire after 15 minutes, so a saved token from an earlier session comes back as a `401`
-`application/problem+json` body (plus a `WWW-Authenticate: Bearer` header) — re-run `/auth/login`.
+Tokens now expire after 15 minutes, so a saved token from an earlier session will come back `401`
+with `WWW-Authenticate: Bearer error="invalid_token"` — re-run `/auth/login`.
 
 ## Related
 [Rate Limiting](rate-limiting.md) (keys on this same trusted `userId` header) ·
