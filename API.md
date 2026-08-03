@@ -146,6 +146,8 @@ Records an activity session and computes XP (with a chance of a bonus roll). Req
 
 **Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
 
+**Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
+
 **Request body:**
 | Field | Type | Notes |
 |---|---|---|
