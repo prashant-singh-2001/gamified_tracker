@@ -1,30 +1,39 @@
 package com.tracker.gateway.auth;
 
+import com.tracker.gateway.dto.AuthResponse;
 import com.tracker.gateway.dto.LoginRequest;
 import com.tracker.gateway.dto.RegisterRequest;
 import com.tracker.gateway.exception.InvalidCredentialsException;
+import com.tracker.gateway.repository.UserRepository;
+import com.tracker.gateway.user.RefreshToken;
 import com.tracker.gateway.user.Role;
 import com.tracker.gateway.user.User;
-import com.tracker.gateway.user.UserRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AuthService {
 
+    @Value("${jwt.expiration}")
+    private long expiration;
+
     private final UserRepository userRepository;
     private final JwtUtil jwtUtil;
     private final PasswordEncoder passwordEncoder;
+    private final RefreshTokenService refreshTokenService;
 
     public AuthService(UserRepository userRepository,
                        JwtUtil jwtUtil,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       RefreshTokenService refreshTokenService) {
         this.userRepository = userRepository;
         this.jwtUtil = jwtUtil;
         this.passwordEncoder = passwordEncoder;
+        this.refreshTokenService = refreshTokenService;
     }
 
-    public String register(RegisterRequest request) {
+    public AuthResponse register(RegisterRequest request) {
 
         var user = new User();
         user.setFirstName(request.firstName());
@@ -37,10 +46,13 @@ public class AuthService {
         user.setRole(request.role() != null ? request.role() : Role.USER);
         userRepository.save(user);
 
-        return jwtUtil.generateToken(user.getEmail(), user.getRole(),user.getId());
+        String accessToken = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId());
+        RefreshToken refreshToken = refreshTokenService.generateRefreshToken(user);
+
+        return new AuthResponse(accessToken, refreshToken.getToken());
     }
 
-    public String login(LoginRequest req) {
+    public AuthResponse login(LoginRequest req) {
 
         var user = userRepository.findByEmail(req.email())
                 .orElseThrow(InvalidCredentialsException::new);
@@ -50,6 +62,26 @@ public class AuthService {
             throw new InvalidCredentialsException();
         }
 
-        return jwtUtil.generateToken(user.getEmail(), user.getRole(),user.getId());
+        String accessToken = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId());
+        RefreshToken refreshToken = refreshTokenService.generateRefreshToken(user);
+
+        return new AuthResponse(accessToken, refreshToken.getToken());
+    }
+
+    public AuthResponse refresh(String refreshToken) {
+        // Validate the refresh token
+        RefreshToken oldToken = refreshTokenService.validateRefreshToken(refreshToken);
+        User user = oldToken.getUser();
+
+        // Mark old token as used
+        refreshTokenService.markUsed(oldToken);
+
+        // Generate new Refresh Token
+        RefreshToken newRefreshToken = refreshTokenService.generateRefreshToken(user);
+
+        // Generate new Access Token
+        String newAccessToken = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId());
+
+        return new AuthResponse(newAccessToken, newRefreshToken.getToken());
     }
 }

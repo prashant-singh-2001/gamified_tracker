@@ -66,6 +66,7 @@ server:
 jwt:
   secret: ${JWT_SECRET}
   expiration: ${JWT_EXPIRATION:900000}   # 15 mins in ms
+  refresh-expiration: ${REFRESH_EXPIRATION:604800000}  # 7 days in ms
 
 # Logging (very useful during dev)
 logging:
