@@ -229,24 +229,71 @@ All reads here are **intentionally open** — any authenticated player can view 
 
 Request/response bodies mirror the Gamification Service (`activityId`, `level`, `xpRequired`) — see [Gamification Service § Activity Level Threshold](#activity-level-threshold-1) below.
 
+**Not yet exposed here:** achievement badges are fully implemented in `gamification-service`
+(`AchievementServiceImpl.evaluateAndAward`) but have no HTTP endpoint and no production trigger yet —
+see [Achievement Badges](docs/features/achievement-badges.md) for the honest-gap writeup.
+
 ---
 
-### Achievements
+### Analytics
 
-Badges are granted automatically inside the XP transaction (every `POST /api/level` and every async XP application from `POST /api/activitylog`), so there is no "evaluate" endpoint — only a read.
+Routed through the Gateway via the same `/api/activitylog/**` match as Activity Log above (there is
+no separate `/api/analytics/**` route). See [Analytics](docs/features/analytics.md) for the full
+design writeup, including the in-memory-aggregation trade-off and known gaps.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/achievements` | authenticated | the **caller's own** unlocked badges, newest first. Scoped from the trusted `userId` header — there is no `/user/{id}` variant, so one user cannot read another's |
-
-Each element: `achievementId`, `code`, `name`, `description`, `criteriaType` (`TOTAL_XP` \| `REACH_LEVEL_ANY` \| `ACTIVITIES_LOGGED` \| `ACTIVITY_LEVEL`), `threshold`, `activityId` (only for `ACTIVITY_LEVEL`), `unlockedAt`.
+| `GET` | `/api/activitylog/analytics/user/{userId}/category-summary` | authenticated | totals per `Category`: `totalDurationMinutes`, `totalXpEarned`, `totalSessions`. Open read — `{userId}` can be anyone |
+| `GET` | `/api/activitylog/analytics/user/{userId}/xp-over-time?days=7` | authenticated | one `{date, totalXpEarned, totalDurationMinutes}` entry per day in the window, **zero-filled** — always returns exactly `days` entries regardless of how many have logs |
+| `GET` | `/api/activitylog/analytics/user/{userId}/weekly-report` | authenticated | `currentWeekXp`, `previousWeekXp`, `percentageChange` (`100.0` if the previous week was `0` and this week isn't, `0.0` if both are `0`), `totalActiveMinutes`, `topCategory` (`null` if the week has no logs), `dailyBreakdown` (7 zero-filled entries for the current week) |
 
 ---
 
-### Misc
+### Notifications
 
-#### `GET /api/hello`
-Returns `"Hello {email}"` for the authenticated caller. Requires auth. Diagnostic/example endpoint only.
+Surfaces level-up events (`LevelUpEvent`) as a caller-scoped feed. Full detail in
+[Level-Up Notifications](docs/features/level-up-notifications.md).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/notifications?unreadOnly=false` | authenticated | the caller's own level-up events, newest first. `unreadOnly=true` filters to unread only |
+| `GET` | `/api/notifications/unread-count` | authenticated | `{"Count": <long>}` |
+| `POST` | `/api/notifications/{id}/read` | authenticated | marks one notification read. `204 No Content`, or `404` if `{id}` doesn't belong to the caller (ownership is enforced — this is not an open read like Level Tracker/Activity Log) |
+
+**Response shape** (list endpoint): `id`, `activityId`, `oldLevel`, `newLevel`, `totalXp`,
+`currentLevelXp`, `read` (boolean), `createdAt`.
+
+---
+
+### Leaderboard
+
+Live-computed ranking (`SUM(level_tracker.total_xp) GROUP BY user_id`), not a materialized
+snapshot — see [Rank & Level System](docs/features/rank-and-level-system.md) for how this differs
+from `/api/ranks` below.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/leaderboard?page=0&size=20` | authenticated | global leaderboard, paged. **`page` and `size` are both required** — omitting either is a `400` (no defaults at this endpoint) |
+| `GET` | `/api/leaderboard/activity/{activityId}?page=0&size=20` | authenticated | leaderboard scoped to one activity, same paging rule |
+| `GET` | `/api/leaderboard/me` | authenticated | the caller's own global rank as a bare integer (not wrapped in an object) |
+
+**Response shape** (paged endpoints): array of `{rank, userId, totalXp}`.
+
+---
+
+### Ranks
+
+A separate, materialized ranking system from Leaderboard above — percentile-based tiers
+(`SUMMIT`…`BASECAMP`) recomputed on a schedule into `user_rank`, so reads here are O(1) rather than
+a live aggregate query. See [Rank & Level System](docs/features/rank-and-level-system.md).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/ranks/me` | authenticated | the caller's `RankCardDto`: `tier`, `overallLevel`, `totalXp`, `percentile`, `position`, `totalUsers`, `updatedAt`. `404` if the caller has no rank yet (never recomputed) |
+| `GET` | `/api/ranks/{tier}/leaderboard?page=0&size=20` | authenticated | members of one tier (`SUMMIT`, `PEAK`, `RIDGE`, `ALPINE`, `ASCENT`, `HIGHLAND`, `FOOTHILL`, `TRAILHEAD`, `BASECAMP`), each `{withinRankPosition, userId, totalXp, overallLevel, tier}` |
+| `GET` | `/api/ranks/me/leaderboard?page=0&size=20` | authenticated | same shape, scoped to the caller's own tier. `404` if the caller has no rank yet |
+| `GET` | `/api/ranks` | authenticated | tier distribution: array of `{tier, userCount}` |
+| `POST` | `/api/ranks/recompute` | authenticated | forces an off-schedule recompute (normally runs every `ranking.recompute-interval-ms`, default 5 min). Returns `{"rankedUsers": <int>}`. **No admin guard** — any authenticated caller can trigger this |
 
 ---
 
@@ -292,7 +339,10 @@ Direct-hit equivalents of the Gateway's [Session Integrity Review](#session-inte
 
 ## Gamification Service (port 8082) — internal
 
-Base paths `/level`, `/threshold`, `/notifications`, `/leaderboard`, `/ranks`, and `/achievements`. No auth layer of its own.
+Base paths `/level`, `/threshold`, `/notifications`, `/leaderboard`, and `/ranks`. No auth layer of
+its own — the internal sections below cover `/level` and `/threshold` in full; `/notifications`,
+`/leaderboard`, and `/ranks` are documented above under the Gateway's public surface (same request/
+response shapes, just called directly on `:8082` instead of proxied).
 
 ### Level Tracker
 
@@ -311,7 +361,7 @@ List every `LevelTracker` row (all users, all activities).
 | `progressPercent` | double | how far through the **current level's band** the user is, 0–100, rounded to 2dp. Reaching a new level resets this to ~0, it does not keep climbing toward 100 across levels. `100.0` when topped out |
 | `leveledUp` | boolean | `true` only on the `POST /level` response that actually crossed a threshold on that call. **Every `GET` endpoint below hardcodes this to `false`**, even for a row currently above level 1 — it's not derived from stored state, only from the outcome of the specific write that populated it. |
 
-Both progress fields follow the same precedence as the level itself: explicit `activity_level_threshold` rows if the activity has any, otherwise the default curve (`leveling.default-curve.*`). An activity that has exhausted its own explicit ladder reports `xpForNextLevel: 0.0, progressPercent: 100.0` rather than continuing onto the formula.
+**Honest gap:** unlike the `level`/`currentLevelXp` fields (which do fall back to the formula-driven default curve for activities with no explicit thresholds — see [Leveling Engine](docs/features/leveling-engine.md)), `xpForNextLevel`/`progressPercent` are resolved from explicit `activity_level_threshold` rows only. An activity running on the default curve has no next-threshold row, so these two report `xpForNextLevel: 0.0, progressPercent: 100.0` even while its level keeps climbing — the progress bar and the level disagree for unseeded activities.
 
 #### `GET /level/{id}`
 Fetch one `LevelTracker` by its internal numeric id. `200 OK` or `404` `ProblemDetail` (`"LevelTracker with id: {id} not found"`).
@@ -325,7 +375,7 @@ Create-or-update a user's XP for an activity, recalculating level. Reads `userId
 | Field | Type | Notes |
 |---|---|---|
 | `activityId` | Long | |
-| `xp` | double | XP to add. **Must be ≥ 0** — negative values are rejected with a `400` `ProblemDetail` (`"Invalid request body"`) before reaching the database |
+| `xp` | double | XP to add. Carries `@PositiveOrZero` — a negative value fails Bean Validation with a `400`, but gamification-service has no handler for that exception, so the body is **not** this service's usual `ProblemDetail` shape (see [Error Handling § Known edges](docs/features/error-handling.md)) |
 
 **Response:** `200 OK`, the resulting `LevelTrackerDto` (shape above, including the real `leveledUp` value for this call). Level-up logic: crosses the highest `ActivityLevelThreshold` whose `xpRequired` is ≤ the new total XP for that activity; `currentLevelXp` becomes `totalXp − threshold.xpRequired`.
 
@@ -367,6 +417,18 @@ Create (or overwrite) a threshold.
 
 ---
 
+## Config Service (port 8888)
+
+A Spring Cloud Config Server (`native` profile, filesystem-backed) — it runs, and answers config
+requests correctly, but **no other service imports it yet**. See
+[Config Server](docs/features/config-server.md) for the full Phase 1 writeup.
+
+```bash
+curl http://localhost:8888/activity-service/default
+```
+
+---
+
 ## Error Response Format
 
 Most `404` responses across all three services use Spring's RFC 7807 `ProblemDetail`:
@@ -381,9 +443,9 @@ Most `404` responses across all three services use Spring's RFC 7807 `ProblemDet
 }
 ```
 
-`401` (`POST /auth/login` failures) and `400` (validation failures) also use `ProblemDetail`. Validation `400`s carry every field violation joined into `detail`, e.g. `"Activity name is required; Start time is required"`.
+`401` (`POST /auth/login` failures) and `400` (validation failures on activity-service endpoints) also use `ProblemDetail`. Validation `400`s carry every field violation joined into `detail`, e.g. `"Activity name is required; Start time is required"`.
 
-The `401` for a missing/expired/malformed bearer token and the `403` for a caller without the required role are written by Spring Security's filter chain rather than a controller advice; `ProblemDetailAuthenticationHandler` gives them `ProblemDetail` bodies too, so every error this API returns has one shape. Both still send `WWW-Authenticate: Bearer`. The `401` detail is intentionally generic (`"Authentication required or token is invalid"`) and never says *why* the token was rejected.
+**Not this shape:** the `401` for a missing/expired/malformed bearer token and the `403` for a caller without the required role are written by Spring Security's filter chain, before any controller advice runs. Neither is customized in this project, so both use Spring's defaults — an **empty body** plus a `WWW-Authenticate: Bearer` header explaining the failure, not a `ProblemDetail`. This is the one place a client parses a different error shape than everywhere else in the API.
 
 Any route that fails to match at all (e.g. a typo'd path) still falls back to Spring's default whitelabel error body, since that never reaches application code.
 

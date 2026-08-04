@@ -1,6 +1,6 @@
 # Concurrency-Safe XP Accumulation
 
-**Service:** `gamification-service` · **Key classes:** `LevelTrackerServiceImpl.save`,
+**Service:** `gamification-service` · **Key classes:** `LevelTrackerServiceImpl`,
 `LevelTrackerRepository`, `LevelTrackerArchive`
 
 ## What it is / why it's notable

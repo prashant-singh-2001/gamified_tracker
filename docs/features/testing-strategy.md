@@ -1,13 +1,13 @@
 # Testing Strategy — Sliced, Fast, Hermetic
 
-**Modules:** all five · **47 test classes, 217 tests** · **Key techniques:** test slices
+**Modules:** all six · **48 test classes, 210 tests** · **Key techniques:** test slices
 (`@WebMvcTest`, `@DataJpaTest`), Mockito unit tests, `InOrder`/`ArgumentCaptor`, H2 for the
-persistence layer, `@MockitoBean` to keep infra-dependent context tests hermetic
+persistence layer, `@MockBean`/`@MockitoBean` to keep infra-dependent context tests hermetic
 
 ## What it is / why it's notable
 
 The suite is built the way a Spring test suite *should* be — as a pyramid of fast, focused slices
-rather than a pile of slow full-context integration tests. 47 test classes across the five modules,
+rather than a pile of slow full-context integration tests. 48 test classes across the six modules,
 each using the narrowest Spring test slice that still exercises the thing under test (or no Spring
 context at all, where a plain constructor call does the job). The interesting parts aren't the counts
 — they're the specific choices that keep the suite fast and deterministic: verifying **ordering** of
@@ -21,11 +21,12 @@ without Docker.
 |---|---|---|---|
 | Plain unit (`@ExtendWith(MockitoExtension.class)` or no framework at all) | 25 | Service/domain logic, mocks at the boundary; pure functions with neither | `LevelTrackerServiceImplTest`, `AchievementServiceImplTest`, `RankTierTest`, `LevelCurveTest` |
 | `@DataJpaTest` (H2) | 10 | Repository queries against a real (in-memory) DB | `LevelTrackerRepositoryTest`, `ActivityStreakRepositoryTest`, `UserRankRepositoryTest` |
-| `@WebMvcTest` (MockMvc) | 8 | Controller HTTP contract, JSON, status codes | `NotificationControllerTest`, `AchievementControllerTest` |
-| `@SpringBootTest` | 4 | One context-load smoke test per service | `ApiGatewayApplicationTests` |
+| `@WebMvcTest` (MockMvc) | 8 | Controller HTTP contract, JSON, status codes | `NotificationControllerTest`, `AnalyticsControllerTest` |
+| `@SpringBootTest` | 5 | One context-load smoke test per service | `ApiGatewayApplicationTests`, `ConfigServiceApplicationTests` |
 
-Per module: gamification-service 26, activity-service 11, api-gateway 8, and one apiece for
-eureka-server (context load) and `contracts` (the wire-format guard below).
+Per module: gamification-service 25, activity-service 13, api-gateway 7, and one apiece for
+eureka-server (context load), `contracts` (the wire-format guard below), and `config-service`
+(context load).
 
 Each slice loads only the beans it needs — a `@WebMvcTest` doesn't spin up JPA or Redis, a
 `@DataJpaTest` doesn't start the web layer — so the vast majority of tests run in milliseconds.
@@ -122,8 +123,10 @@ class ApiGatewayApplicationTests {
 }
 ```
 
-All context tests now use `@MockitoBean` (`org.springframework.test.context.bean.override.mockito`);
-the deprecated `@MockBean` is gone from the suite.
+`@MockBean` is deprecated in favor of `@MockitoBean` (Boot 3.4+), and the migration is partial: 7
+test files (including `ApiGatewayApplicationTests` above) still use the deprecated annotation, while
+`LeaderboardControllerTest` and `RankControllerTest` already use `@MockitoBean` — worth finishing if
+you're touching a file that still has the old one.
 
 ### 7. In-memory persistence — H2 per module
 
@@ -140,17 +143,12 @@ verified at the service layer with mocks and, historically, a live concurrent-bu
 
 ## What's covered
 
-The critical paths all have tests: the IDOR header wiring (`UserIdHeaderFilterTest`), the
-resource-server role mapping and its RFC 7807 401/403 bodies (`SecurityConfigTest`,
-`ProblemDetailAuthenticationHandlerTest`), the outbox producer + relay + idempotent consumer, the
-`ActivityLoggedEvent` wire format and both sides' `__TypeId__` mapping (`RabbitConfigTest`),
-concurrency-safe `save()` + archiving, the `read`/`is_read` derived-query regression guard,
-notification and achievement ownership scoping, and the XP-multiplier resolution.
-
-Two of these tests exist specifically to pin behaviour that was wrong before: that a level's
-progress bar follows the default curve rather than reporting a permanent 100%, and that the
-`countForActivity` precedence query still runs exactly **once** per save after progress started
-consulting it — a strict `verify` that caught a duplicated query the moment it was introduced.
+The critical paths all have tests: the IDOR header wiring (`UserIdHeaderFilterTest`) and the
+resource-server role mapping (`SecurityConfigTest`), the outbox producer + relay + idempotent
+consumer, the `ActivityLoggedEvent` wire format and both sides' `__TypeId__` mapping
+(`RabbitConfigTest`), concurrency-safe `save()` + archiving, the `read`/`is_read` derived-query
+regression guard, notification ownership scoping, the XP-multiplier resolution, and (new) the
+in-memory analytics aggregation in `AnalyticsServiceImplTest`.
 
 ## Known gap (honest inventory)
 

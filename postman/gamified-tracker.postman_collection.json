@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Gamified Tracker API",
-    "description": "Covers the API Gateway's public surface (port 8080), plus direct-hit folders for Activity Service (8081) and Gamification Service (8082) for internal debugging, per API.md. Includes a dedicated 'Security - IDOR Verification' folder exercising the userId-from-JWT fix (spoofed header neutralization, intentionally-open reads), and a 'Session Integrity Review (#67)' folder exercising the duration-validation/quarantine layers and the admin-only review API.\n\nRun order matters: use Collection Runner top-to-bottom (Auth -> Activity -> Activity Log -> Session Integrity Review -> Level Tracker -> Ranks -> Activity Level Threshold -> Security -> Misc -> Rate Limiting -> internal-service folders). The 'Ranks' folder depends on 'Level Tracker' having logged XP for User A earlier in the same run. The 'Rate Limiting' folder self-loops a single request (via setNextRequest) to trip the Gateway's 429, so it only behaves correctly under the Collection Runner, not a manual single Send. Test data (emails, activity name, a synthetic activityId) is generated once per run by the collection-level pre-request script and cached in collection variables, so re-running the whole collection produces fresh, non-colliding data each time.\n\nPrerequisites: `docker-compose up --build` (or the equivalent Maven/local run) so the Gateway (8080), Activity Service (8081), Gamification Service (8082), and Eureka are all up.\n\nKnown caveats baked into these tests:\n- `POST /api/activitylog` (and its internal-service equivalent) can 500 due to a pre-existing, unrelated bug in `ActivityLogServiceImpl`'s XP-bonus roll (`RandomGenerator.getDefault()` failing to find the `L32X64MixRandom` algorithm provider in some JVM/container images). If that request fails, downstream requests that depend on its output (`activityLogId`) are guarded to report a skip rather than crash the run.\n- No-token requests currently return `403`, not the semantically-expected `401` (default Spring Security behavior with no custom `AuthenticationEntryPoint`) - tests accept either.\n- `GET /level/{id}` and `GET /activitylog/{id}` reads are intentionally open to any authenticated user (a social/leaderboard feature, not an access-control gap) - tests assert `200`, not `403`, when a different user reads them.\n- 'Session Integrity Review' logs implausible sessions (700+ minutes) directly against the absolute-flag-minutes threshold (default 600) so no baseline seed data is required; it does not exercise the statistical (per-user/per-category baseline) branch, which needs 10+ prior logs to activate.",
+    "description": "Covers the API Gateway's public surface (port 8080), plus direct-hit folders for Activity Service (8081) and Gamification Service (8082) for internal debugging, per API.md. Includes a dedicated 'Security - IDOR Verification' folder exercising the userId-from-JWT fix (spoofed header neutralization, intentionally-open reads).\n\nRun order matters: use Collection Runner top-to-bottom (Auth -> Activity -> Activity Log -> Analytics -> Level Tracker -> Notifications -> Ranks -> Leaderboard -> Activity Level Threshold -> Security -> Rate Limiting -> internal-service folders). 'Analytics' depends on 'Activity Log' having created a log for User A. 'Notifications' forces its own level-up (an XP grant large enough to cross the default curve's level-2 boundary) so there is always a real event to mark read. 'Ranks' depends on 'Level Tracker' having logged XP for User A earlier in the same run, and 'Leaderboard' in turn depends on that same XP being present. The 'Rate Limiting' folder self-loops a single request (via setNextRequest) to trip the Gateway's 429, so it only behaves correctly under the Collection Runner, not a manual single Send. Test data (emails, activity name, synthetic activityIds) is generated once per run by the collection-level pre-request script and cached in collection variables, so re-running the whole collection produces fresh, non-colliding data each time.\n\nPrerequisites: `docker-compose up --build` (or the equivalent Maven/local run) so the Gateway (8080), Activity Service (8081), Gamification Service (8082), and Eureka are all up.\n\nKnown caveats baked into these tests:\n- No-token requests return `401` with a `WWW-Authenticate` header (the Gateway is an OAuth2 resource server) - see 'No Token - Request Rejected' in the Security folder.\n- `GET /level/{id}` and `GET /activitylog/{id}` reads are intentionally open to any authenticated user (a social/leaderboard feature, not an access-control gap) - tests assert `200`, not `403`, when a different user reads them.\n- Achievement badges (`AchievementServiceImpl.evaluateAndAward`) are implemented and unit-tested but have no HTTP endpoint or production trigger yet - not covered here for that reason, not an oversight.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -45,8 +45,10 @@
     { "key": "flaggedLogId", "value": "", "type": "string" },
     { "key": "flaggedLogIdForRejection", "value": "", "type": "string" },
     { "key": "thresholdActivityId", "value": "1", "type": "string" },
+    { "key": "curveActivityId", "value": "", "type": "string" },
     { "key": "rlAttempts", "value": "0", "type": "string" },
-    { "key": "userATier", "value": "", "type": "string" }
+    { "key": "userATier", "value": "", "type": "string" },
+    { "key": "notificationId", "value": "", "type": "string" }
   ],
   "item": [
     {
@@ -412,7 +414,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
-            "description": "IMPORTANT: this endpoint can return 500 due to a pre-existing, unrelated bug in ActivityLogServiceImpl's XP-bonus roll (RandomGenerator.getDefault() failing to resolve the L32X64MixRandom algorithm in some JVM/container images). If it fails here, that is a known separate issue, not an IDOR regression - the userId-binding fix is independently verified in the Security folder via POST /api/level, which shares the identical Gateway header-injection mechanism but has no RNG dependency.\n\nNote there is deliberately no userId field in the body - the acting user is derived server-side from the JWT."
+            "description": "Note there is deliberately no userId field in the body - the acting user is derived server-side from the JWT."
           },
           "event": [
             {
@@ -433,7 +435,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status is 200 (see request description for the known unrelated failure mode)', function () {",
+                  "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
                   "if (pm.response.code === 200) {",
@@ -983,6 +985,168 @@
       ]
     },
     {
+      "name": "Analytics",
+      "item": [
+        {
+          "name": "Category Summary (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/category-summary",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "category-summary"
+              ]
+            },
+            "description": "Aggregated in-memory over activity_log grouped by Category (not a SQL GROUP BY) - see docs/features/analytics.md. The log created earlier in this run should show up under its HEALTH category."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "if (!pm.collectionVariables.get('activityLogId')) {",
+                  "    pm.test.skip('Skipped - no activityLogId (Create Activity Log likely failed, see that request)');",
+                  "} else {",
+                  "    pm.test('Contains a HEALTH entry with at least 1 session (the activity created earlier is HEALTH)', function () {",
+                  "        var entry = json.find(function (s) { return s.category === 'HEALTH'; });",
+                  "        pm.expect(entry).to.not.be.undefined;",
+                  "        pm.expect(entry.totalSessions).to.be.at.least(1);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "XP Over Time - 7 Days (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/xp-over-time?days=7",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "xp-over-time"
+              ],
+              "query": [
+                {
+                  "key": "days",
+                  "value": "7"
+                }
+              ]
+            },
+            "description": "Zero-filled daily timeline - always returns exactly `days` entries, even for days with no logs, so a client can chart a continuous line without patching gaps itself."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Exactly 7 entries, one per day, zero-filled', function () {",
+                  "    pm.expect(json.length).to.eql(7);",
+                  "});",
+                  "pm.test(\"today's entry (last, since the range ends today) has non-negative XP\", function () {",
+                  "    var today = json[json.length - 1];",
+                  "    pm.expect(today.totalXpEarned).to.be.at.least(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Weekly Report (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/weekly-report",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "weekly-report"
+              ]
+            },
+            "description": "Both the current and previous 7-day windows are fetched in a single query, then partitioned in memory. percentageChange is 100 (not Infinity) when the previous week was zero and this week isn't."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response has the expected fields', function () {",
+                  "    pm.expect(json).to.have.property('currentWeekXp');",
+                  "    pm.expect(json).to.have.property('previousWeekXp');",
+                  "    pm.expect(json).to.have.property('percentageChange');",
+                  "    pm.expect(json).to.have.property('dailyBreakdown');",
+                  "});",
+                  "pm.test('dailyBreakdown has exactly 7 zero-filled entries', function () {",
+                  "    pm.expect(json.dailyBreakdown.length).to.eql(7);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Level Tracker",
       "item": [
         {
@@ -1175,6 +1339,233 @@
                 "exec": [
                   "pm.test('Status is 400', function () {",
                   "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "Force a Level-Up (Setup)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":200.0}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/api/level",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "level"
+              ]
+            },
+            "description": "Setup step, not itself the feature under test: thresholdActivityId already has 25 XP from the Level Tracker folder (no threshold row seeded yet - that happens later, in Activity Level Threshold). +200 more crosses the default curve's level-2 boundary (100 XP), guaranteeing a LevelUpEvent this run can check for below."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('leveledUp is true (setup assumption holds)', function () {",
+                  "    pm.expect(json.leveledUp).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Notifications (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/notifications?unreadOnly=false",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications"
+              ],
+              "query": [
+                {
+                  "key": "unreadOnly",
+                  "value": "false"
+                }
+              ]
+            },
+            "description": "Newest first. Captures the level-up event created above into a collection variable for the mark-read request below."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "pm.test('Contains the level-up event just created (newLevel 2)', function () {",
+                  "    var event = json.find(function (n) { return n.newLevel === 2 && !n.read; });",
+                  "    pm.expect(event).to.not.be.undefined;",
+                  "    pm.collectionVariables.set('notificationId', String(event.id));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unread Count (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/notifications/unread-count",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "unread-count"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Count is at least 1 (the level-up above is unread)', function () {",
+                  "    pm.expect(pm.response.json().Count).to.be.at.least(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Notification Read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/notifications/{{notificationId}}/read",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "{{notificationId}}",
+                "read"
+              ]
+            },
+            "description": "Ownership is enforced here (unlike Level Tracker/Activity Log's open reads) - markRead looks the row up by (id, userId) together, so this would 404 for an id that isn't the caller's."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('notificationId')) {",
+                  "    pm.test.skip('Skipped - no notificationId (List Notifications likely failed to find the level-up event)');",
+                  "} else {",
+                  "    pm.test('Status is 204 No Content', function () {",
+                  "        pm.response.to.have.status(204);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unread Count After Mark-Read",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/notifications/unread-count",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "unread-count"
+              ]
+            },
+            "description": "Confirms marking read actually persisted, not just that the write endpoint returned 204."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
                   "});"
                 ]
               }
@@ -1381,6 +1772,191 @@
       ]
     },
     {
+      "name": "Leaderboard",
+      "item": [
+        {
+          "name": "Global Leaderboard (Paged)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/leaderboard?page=0&size=20",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Live SUM(level_tracker.total_xp) GROUP BY user_id on every call - not a materialized snapshot like /api/ranks. See docs/features/rank-and-level-system.md for how the two differ."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is a non-empty array containing User A', function () {",
+                  "    pm.expect(json).to.be.an('array').that.is.not.empty;",
+                  "    var mine = json.find(function (e) { return String(e.userId) === pm.collectionVariables.get('userAId'); });",
+                  "    pm.expect(mine).to.not.be.undefined;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Global Leaderboard - Missing Page/Size (400)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/leaderboard",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "leaderboard"
+              ]
+            },
+            "description": "page and size have no @RequestParam default in LeaderboardController - omitting either is a 400, unlike /api/ranks/{tier}/leaderboard which defaults both."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 (page/size are required, no defaults)', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activity Leaderboard (Paged)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/leaderboard/activity/{{thresholdActivityId}}?page=0&size=20",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "leaderboard",
+                "activity",
+                "{{thresholdActivityId}}"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My Rank (bare Long)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/leaderboard/me",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "leaderboard",
+                "me"
+              ]
+            },
+            "description": "Returns a bare JSON number, not an object - different response shape from every other endpoint in this collection."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Body is a bare number, at least 1', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json).to.be.a('number');",
+                  "    pm.expect(json).to.be.at.least(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Activity Level Threshold",
       "item": [
         {
@@ -1504,6 +2080,114 @@
                 "exec": [
                   "pm.test('Status is 404', function () {",
                   "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Effective Ladder - No Explicit Rows (Default Curve)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/threshold/activity/{{curveActivityId}}?upToLevel=5",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "threshold",
+                "activity",
+                "{{curveActivityId}}"
+              ],
+              "query": [
+                {
+                  "key": "upToLevel",
+                  "value": "5"
+                }
+              ]
+            },
+            "description": "curveActivityId never gets an explicit threshold row anywhere in this collection, so this exercises the default-curve fallback: xpRequiredFor(level) = 100 * (level-1)^1.5, generated on the fly and not persisted. See docs/features/leveling-engine.md."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Exactly 5 generated entries (upToLevel=5)', function () {",
+                  "    pm.expect(json.length).to.eql(5);",
+                  "});",
+                  "pm.test('Level 1 requires 0 XP', function () {",
+                  "    pm.expect(json[0].level).to.eql(1);",
+                  "    pm.expect(json[0].xpRequired).to.eql(0.0);",
+                  "});",
+                  "pm.test('Level 2 requires exactly 100 XP (base-xp default)', function () {",
+                  "    pm.expect(json[1].xpRequired).to.eql(100.0);",
+                  "});",
+                  "pm.test('Level 5 requires exactly 800 XP (100 * 4^1.5)', function () {",
+                  "    pm.expect(json[4].xpRequired).to.eql(800.0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Effective Ladder - Explicit Rows Win (No Curve Blend)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/threshold/activity/{{thresholdActivityId}}?upToLevel=10",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "threshold",
+                "activity",
+                "{{thresholdActivityId}}"
+              ],
+              "query": [
+                {
+                  "key": "upToLevel",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "thresholdActivityId has exactly one explicit row (level 2, created by Create Threshold above). Precedence rule: an activity with ANY explicit row uses ONLY its own rows, never blending in curve-generated levels for the rest of the requested range - so this returns length 1, not 10."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Returns exactly the one explicit row, not 10 curve-blended entries', function () {",
+                  "    pm.expect(json.length).to.eql(1);",
+                  "    pm.expect(json[0].level).to.eql(2);",
+                  "    pm.expect(json[0].xpRequired).to.eql(100.0);",
                   "});"
                 ]
               }
@@ -1691,35 +2375,6 @@
       ]
     },
     {
-      "name": "Misc",
-      "item": [
-        {
-          "name": "Hello",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
-            "url": { "raw": "{{gatewayUrl}}/api/hello", "host": ["{{gatewayUrl}}"], "path": ["api", "hello"] }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status is 200', function () {",
-                  "    pm.response.to.have.status(200);",
-                  "});",
-                  "pm.test('Greets the authenticated caller by email', function () {",
-                  "    pm.expect(pm.response.text()).to.include(pm.collectionVariables.get('userAEmail'));",
-                  "});"
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
       "name": "Rate Limiting",
       "description": "Exercises the Gateway's Redis-backed Bucket4j rate limiter. Fires the same proxied request (GET /api/level, on the gamification route) repeatedly as one authenticated user until the per-user token bucket is exhausted and the Gateway returns 429 with an X-RateLimit-Remaining header.\n\nThe single request self-loops via postman.setNextRequest, so this only works in the Collection Runner / Newman - a plain single Send fires it just once. The limit is keyed on the JWT-derived userId (IP fallback), so it throttles only User A's own bucket; it does not touch other users or the separate /auth guard.\n\nCaveats: earlier folders also made /api/level, /api/threshold and /api/notifications calls as User A (the same bucket), so the 429 can appear before a full 100 requests - the loop just runs until it trips, capped at 130 attempts. On rapid re-runs within the same 60s window the bucket may still be partly drained from the previous run (it refills at capacity/period).",
       "item": [
@@ -1833,7 +2488,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{activityServiceUrl}}/activitylog/", "host": ["{{activityServiceUrl}}"], "path": ["activitylog", ""] },
-            "description": "Same known RNG-bug caveat as the Gateway equivalent in the Activity Log folder applies here."
+            "description": "Bypasses the Gateway - the userId header is taken as-is, with no trusted-identity guarantee, since this service has no security layer of its own."
           },
           "event": [
             {
@@ -1852,7 +2507,7 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status is 200 (see request description for the known unrelated failure mode)', function () {",
+                  "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});"
                 ]
