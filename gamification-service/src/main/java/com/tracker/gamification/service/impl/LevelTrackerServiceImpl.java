@@ -4,15 +4,18 @@ import com.tracker.gamification.dao.ActivityLevelThreshold;
 import com.tracker.gamification.dao.LevelTracker;
 import com.tracker.gamification.dao.LevelTrackerArchive;
 import com.tracker.gamification.dao.LevelUpEvent;
+import com.tracker.gamification.dao.ManualXpAward;
 import com.tracker.gamification.domain.LevelCurve;
 import com.tracker.gamification.domain.LevelOutcome;
 import com.tracker.gamification.domain.LevelProgress;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
+import com.tracker.gamification.dto.ManualXpAwardRequest;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.LevelUpEventRepository;
+import com.tracker.gamification.repository.ManualXpAwardRepository;
 import com.tracker.gamification.service.LevelTrackerService;
 import com.tracker.gamification.service.OverallLevelService;
 import lombok.AllArgsConstructor;
@@ -38,6 +41,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final LevelUpEventRepository levelUpEventRepository;
     private final OverallLevelService overallLevelService;
     private final LevelCurve levelCurve;
+    private final ManualXpAwardRepository manualXpAwardRepository;
 
     @Override
     public List<LevelTrackerDto> findByUserId(Long userId) {
@@ -127,6 +131,24 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         }
 
         return mapToDto(saved, leveledUp, progressFor(saved));
+    }
+
+    // #74: audit write lives here, not inside save(), so every event-driven award (the
+    // RabbitMQ path) is NOT recorded as a manual one — save() stays the shared primitive
+    // the concurrency-safe-xp doc describes.
+    @Override
+    public LevelTrackerDto awardManually(Long actorUserId, ManualXpAwardRequest request) {
+        Long targetUserId = request.targetUserId() != null ? request.targetUserId() : actorUserId;
+
+        manualXpAwardRepository.save(ManualXpAward.builder()
+                .actorUserId(actorUserId)
+                .targetUserId(targetUserId)
+                .activityId(request.activityId())
+                .xp(request.xp())
+                .awardedAt(LocalDateTime.now())
+                .build());
+
+        return save(targetUserId, new LevelTrackerRequestDTO(request.activityId(), request.xp()));
     }
 
     private void archivePreviousState(LevelTracker tracker) {

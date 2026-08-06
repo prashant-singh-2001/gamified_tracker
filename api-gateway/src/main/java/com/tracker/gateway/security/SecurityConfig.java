@@ -49,6 +49,10 @@ public class SecurityConfig {
                         // transitions are maintainer-only. activity-service has no Spring Security
                         // of its own, so this is the only place it can be enforced.
                         .requestMatchers("/api/activitylog/review/**").hasRole("ADMIN")
+                        // #74: POST /level is a manual XP-award tool that writes straight into
+                        // level_tracker. gamification-service has no Spring Security of its own,
+                        // so this is the only place it can be enforced.
+                        .requestMatchers(HttpMethod.POST, "/api/level", "/api/level/").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt

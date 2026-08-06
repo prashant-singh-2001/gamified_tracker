@@ -1,7 +1,7 @@
 # Authentication & Trusted-Identity Propagation
 
 **Service:** `api-gateway` · **Key classes:** `JwtUtil`, `AuthService`, `SecurityConfig`,
-`UserIdHeaderFilter`
+`UserIdHeaderFilter`, `RefreshTokenService`, `RefreshToken`, `AdminBootstrap`
 
 ## What it is / why it's notable
 
@@ -132,6 +132,8 @@ http.csrf(csrf -> csrf.disable())
                         "/v3/api-docs", "/v3/api-docs/**", "/swagger-resources/**", "/actuator/**")
                 .permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")
+                .requestMatchers("/api/activitylog/review/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/level", "/api/level/").hasRole("ADMIN")
                 .anyRequest().authenticated())
         .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt
@@ -141,6 +143,19 @@ http.csrf(csrf -> csrf.disable())
 ```
 Role gating happens at the **URL level**, not `@PreAuthorize` — because routing is declarative
 (see [API Gateway Routing](api-gateway-routing.md)), there's no controller method left to annotate.
+The `POST /api/level` matcher is the newest of the three (issue #74): that endpoint used to be a
+public, unbounded XP mint (see [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)) — any
+authenticated user could award themselves arbitrary XP for arbitrary activities. All three ADMIN
+matchers share the same limitation: they're enforced **only** at the gateway, because
+activity-service and gamification-service have no Spring Security of their own and are directly
+reachable in the dev compose setup (`:8081`, `:8082`) — bypassing the gateway also bypasses every
+role check on it.
+
+**Admin provisioning.** Since `register` can no longer take a role from the client (see above), the
+only way to create an ADMIN account is `AdminBootstrap`, an `ApplicationRunner` gated by
+`app.admin.bootstrap.enabled` (off by default, see Config below). When enabled, it creates the
+configured email as `Role.ADMIN` if absent, or promotes it to `ADMIN` if it already exists as a
+`USER` — idempotent either way, safe to leave enabled across restarts.
 
 Note the ordering: `addFilterAfter(..., BearerTokenAuthenticationFilter.class)`. The identity
 filter now runs *after* the framework has authenticated the token, not before — it can therefore
@@ -205,6 +220,96 @@ unmodified, and a request with no `userId` header at all never got one added. Ov
 closes both holes: it removes any client-sent variant by name (case-insensitively) before
 re-adding the trusted one, so every enumeration path a caller might use sees the same value.
 
+### 5. Refresh tokens — rotation with reuse detection
+
+Access tokens now expire after 15 minutes (see Config below), which would otherwise mean re-logging
+in every 15 minutes. `POST /auth/refresh` trades a refresh token for a new `AuthResponse` without
+touching the password again:
+
+```java
+public AuthResponse refresh(String refreshToken) {
+    RefreshToken oldToken = refreshTokenService.validateRefreshToken(refreshToken);
+    User user = oldToken.getUser();
+
+    refreshTokenService.markUsed(oldToken);
+    RefreshToken newRefreshToken = refreshTokenService.generateRefreshToken(user);
+    String newAccessToken = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId());
+
+    return new AuthResponse(newAccessToken, newRefreshToken.getToken());
+}
+```
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant AC as AuthController
+    participant RTS as RefreshTokenService
+    participant DB as refresh_token table
+
+    C->>AC: POST /auth/refresh {refreshToken}
+    AC->>RTS: validateRefreshToken(token)
+    RTS->>DB: findByToken(token)
+    alt not found
+        RTS-->>C: 401 "Refresh token not found"
+    else expired
+        RTS->>DB: delete this token
+        RTS-->>C: 401 "Refresh token expired, please log in again"
+    else already used
+        RTS->>DB: delete EVERY token for this user
+        RTS-->>C: 401 "Refresh token already used."
+    else valid, unused
+        AC->>RTS: markUsed(oldToken)
+        RTS->>DB: used = true
+        AC->>RTS: generateRefreshToken(user)
+        RTS->>DB: insert new token row
+        AC-->>C: 200 new AuthResponse{accessToken, refreshToken}
+    end
+```
+
+Unlike the stateless access token, a refresh token is **tracked server-side** — `RefreshToken` is a
+real row (`refresh_token` table: `token` UUID string, `user_id` FK, `expiresAt`, a `used` flag), not
+just a signed claim. That's what makes revocation possible at all; a stateless JWT can't be
+individually invalidated before it expires, but a DB row can be deleted.
+
+**Every refresh token is single-use, and every successful refresh rotates it** — `markUsed` flips the
+row's `used` flag and a brand-new token is issued alongside the new access token; the presented token
+is never handed back. This is what makes the next part meaningful:
+
+```java
+if (refreshToken.isUsed()) {
+    revokeAllForUser(refreshToken.getUser().getId());
+    throw new InvalidCredentialsException("Refresh token already used.");
+}
+```
+Presenting an *expired* token is treated as benign — the one token is deleted and the client is told
+to log in again. Presenting an **already-used** token is treated differently: since rotation means
+a legitimate client would never do this (it always gets a fresh token back and discards the old
+one), a used-token replay is a signal that the token was copied or stolen, and *every* refresh token
+belonging to that user is revoked — not just the one presented. This is the standard refresh-token
+rotation + reuse-detection pattern: it doesn't stop a single theft, but it forces both the attacker's
+and the legitimate user's sessions to re-authenticate the moment the theft is exploited, bounding the
+damage instead of leaving a stolen long-lived token valid for its full 7-day life.
+
+`InvalidCredentialsException` gained a message-carrying constructor to support this
+(`GatewayExceptionHandler` maps it to `401` `ProblemDetail` either way) — note this is a deliberate
+departure from the login path's no-enumeration principle above: refresh failures *do* say exactly
+why ("not found" vs "expired" vs "already used"), because a refresh token isn't a guessable secret
+like a password, so distinguishing failure reasons here doesn't leak anything an attacker couldn't
+already infer from possessing the token.
+
+**A narrow TOCTOU window worth knowing about:** `validateRefreshToken` (the check) and `markUsed`
+(the write) are two separate `@Transactional` calls with no row lock or optimistic-version field
+between them. Two concurrent `/auth/refresh` calls presenting the same still-valid token can both
+pass validation before either marks it used, both minting a new token pair from the same old one.
+Low blast radius in practice (both requests came from someone holding the same valid token), but it
+means reuse detection is not airtight against a client that retries/duplicates the exact same
+request in flight.
+
+**No logout endpoint calls `revoke`/`revokeAllForUser` directly today** — both methods exist and are
+exercised (`RefreshTokenServiceTest`), but the only caller in production code is
+`validateRefreshToken`'s own error paths above. A `POST /auth/logout` that revokes the caller's
+refresh token(s) on demand is the natural next piece, not yet built.
+
 ## Downstream trust model
 
 `activity-service` and `gamification-service` have zero security dependencies. Their controllers
@@ -218,38 +323,82 @@ way to defeat this — a documented, known caveat, not a gap in the fix itself.
 `api-gateway/src/main/resources/application.yaml`:
 ```yaml
 jwt:
-  secret: ${JWT_SECRET}                    # HS256 signing key — no default, startup fails without it
-  expiration: ${JWT_EXPIRATION:900000}     # 15 min in ms
+  secret: ${JWT_SECRET}                              # HS256 signing key — no default, startup fails without it
+  expiration: ${JWT_EXPIRATION:900000}                # 15 min in ms — access token lifetime
+  refresh-expiration: ${REFRESH_EXPIRATION:604800000} # 7 days in ms — refresh token lifetime
 ```
 `jwt.secret` deliberately has **no fallback value**: a checked-in default is a signing key everyone
 who has ever read the repo already knows. The gateway refuses to start rather than come up with a
 public key. Set it in `.env` (see `.env.example`); it must be at least 32 bytes for HS256.
+`REFRESH_EXPIRATION` is the one env var of the three **not yet listed in `.env.example`** — it falls
+back to its 7-day default until that's added.
+
+```yaml
+app:
+  admin:
+    bootstrap:
+      enabled: ${ADMIN_BOOTSTRAP_ENABLED:false}   # off by default — CI's `cp .env.example .env` needs no secrets
+      email: ${ADMIN_EMAIL:}
+      password: ${ADMIN_PASSWORD:}
+```
+`AdminBootstrap` throws `IllegalStateException` at startup if `enabled=true` with a blank email or
+password, rather than silently no-op-ing on a half-configured bootstrap.
 
 ## Tests
 
 `SecurityConfigTest` covers the two beans directly — that `jwtDecoder` is built from the configured
 secret, and that the converter maps an `ADMIN` role claim to `ROLE_ADMIN` while a missing claim
-falls back to `ROLE_USER`. `UserIdHeaderFilterTest` covers the filter's four behaviours: skipped
-with no authentication, `401` on a missing `userId` claim, header injected on the happy path, and
-pass-through when the authentication isn't a `JwtAuthenticationToken`.
+falls back to `ROLE_USER`. It mocks `HttpSecurity` and never invokes `filterChain(...)`, so it does
+**not** exercise any `hasRole("ADMIN")` matcher — `SecurityRulesTest` closes that gap: a
+`@SpringBootTest` + `@AutoConfigureMockMvc` test that mints real USER/ADMIN tokens with `JwtUtil` and
+asserts `POST /api/level` and `POST /api/activity` return `403` for a USER token and let an ADMIN
+token past authorization (verified by asserting the response isn't `403`, since what happens next —
+routing to a live service instance — is out of scope for a gateway-only test). `UserIdHeaderFilterTest`
+covers the filter's four behaviours: skipped with no authentication, `401` on a missing `userId`
+claim, header injected on the happy path, and pass-through when the authentication isn't a
+`JwtAuthenticationToken`. `RefreshTokenServiceTest` covers `generateRefreshToken`, the three
+`validateRefreshToken` outcomes (not-found, expired + single revoke, already-used + revoke-all),
+`markUsed`, and both revoke methods directly. `AuthServiceTest.shouldRefreshTokensSuccessfully`
+covers the full rotation through `AuthService`: old token marked used, new access + refresh tokens
+both returned; `shouldAlwaysAssignUserRoleRegardlessOfCaller` pins that `register` can no longer
+produce anything but a `USER` account. `AdminBootstrapTest` covers all four `run()` branches: create,
+promote, no-op when already ADMIN, and the blank-email/password guard.
 
 ## Try it
 
 ```bash
 # Register — returns both an access token and a refresh token
 curl -X POST http://localhost:8080/auth/register \
+# Register — now returns {"accessToken": "...", "refreshToken": "..."}, not a raw JWT
+RESPONSE=$(curl -s -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
   -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret"}'
+TOKEN=$(echo "$RESPONSE" | jq -r .accessToken)
+REFRESH=$(echo "$RESPONSE" | jq -r .refreshToken)
 
-# Spoofed-header test: authenticated as Ada, but forge a userId header for another user
-curl -X POST http://localhost:8080/api/level -H "Authorization: Bearer $TOKEN" \
+# Spoofed-header test: authenticated as Ada, but forge a userId header for another user.
+# (POST /api/level is admin-only as of #74 — /api/activitylog is the everyday endpoint that
+# still demonstrates the same header-trust point, since it also reads userId off the header.)
+curl -X POST http://localhost:8080/api/activitylog -H "Authorization: Bearer $TOKEN" \
   -H "userId: 999" -H "Content-Type: application/json" \
-  -d '{"activityId":1,"xp":5}'
-# -> XP still lands on Ada's real id, never 999
+  -d '{"activityName":"Study","startTime":"2026-07-16T09:00:00","endTime":"2026-07-16T09:30:00"}'
+# -> the log (and its eventual XP) still lands on Ada's real id, never 999
+
+# 15 minutes later, the access token is dead — trade the refresh token for a new pair
+# instead of logging in again. The old $REFRESH is now burned; only the new one works.
+curl -X POST http://localhost:8080/auth/refresh -H "Content-Type: application/json" \
+  -d "{\"refreshToken\":\"$REFRESH\"}"
+
+# Reuse detection: presenting that same (now-used) $REFRESH again revokes every refresh
+# token this user has, not just this one
+curl -i -X POST http://localhost:8080/auth/refresh -H "Content-Type: application/json" \
+  -d "{\"refreshToken\":\"$REFRESH\"}"
+# -> 401 "Refresh token already used."
 ```
-The Postman collection's **Security – IDOR Verification** folder automates exactly this test.
-Tokens now expire after 15 minutes, so a saved token from an earlier session will come back `401`
-with `WWW-Authenticate: Bearer error="invalid_token"` — re-run `/auth/login`.
+The Postman collection's **Security – IDOR Verification** folder automates the spoofed-header test.
+Access tokens expire after 15 minutes, so a saved token from an earlier session will come back `401`
+with `WWW-Authenticate: Bearer error="invalid_token"` — either re-run `/auth/login`, or `/auth/refresh`
+if the refresh token from that session is still unused and unexpired.
 
 ## Related
 [Rate Limiting](rate-limiting.md) (keys on this same trusted `userId` header) ·

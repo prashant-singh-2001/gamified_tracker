@@ -134,9 +134,10 @@ saved **before** XP is applied — not after. If two deliveries of the same even
 second `save()` throws a constraint violation, which rolls back the *entire* transaction (including
 any XP that would have been applied), the message gets redelivered, and this time `existsById` is
 already `true`. XP is applied **exactly once** despite at-least-once delivery — and it calls the
-**same** `LevelTrackerServiceImpl.save(userId, dto)` the HTTP `POST /level` endpoint uses (see
-[Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)), so there's no business-logic fork
-between the sync and async paths.
+**same** `LevelTrackerServiceImpl.save(userId, dto)` that the HTTP `POST /level` endpoint eventually
+reaches too (see [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)), so there's no
+business-logic fork in the XP accumulation itself between the sync and async paths — only in what
+gates and audits the HTTP side on the way in, see below.
 
 ### 4. Dead-letter queue — `RabbitConfig` (gamification side)
 
@@ -203,12 +204,17 @@ precedence is only correct once no pre-upgrade producer can still be publishing.
 
 ```mermaid
 flowchart LR
-    HTTP["POST /level"] --> SAVE["LevelTrackerServiceImpl.save(userId, dto)"]
+    HTTP["POST /level (admin-only, #74)"] --> AWARD["awardManually()<br/>writes manual_xp_award"]
+    AWARD --> SAVE["LevelTrackerServiceImpl.save(userId, dto)"]
     MQ["ActivityLoggedListener"] --> SAVE
     SAVE --> DB[("level_tracker,<br/>level_tracker_archive,<br/>level_up_event")]
 ```
-The HTTP endpoint and the RabbitMQ consumer both converge on the identical save path — the consumer
-just calls it in-process with `userId` from the event payload instead of a request header.
+The RabbitMQ consumer calls `save()` directly, in-process, with `userId` from the event payload. The
+HTTP endpoint no longer does — since issue #74, `POST /level` is an admin-only manual-award tool that
+goes through `awardManually()` first, which records who awarded what to whom (`manual_xp_award`, an
+audit-only table this listener path deliberately never writes to) before delegating to the same
+`save()`. Both paths still converge on identical XP accumulation semantics; only the HTTP side picks
+up an authorization gate, a per-call cap, and an audit trail on the way in.
 
 ## The response-shape trade-off
 

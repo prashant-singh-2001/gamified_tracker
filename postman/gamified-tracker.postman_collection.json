@@ -32,7 +32,7 @@
     { "key": "userAPassword", "value": "Password123!", "type": "string" },
     { "key": "userBEmail", "value": "", "type": "string" },
     { "key": "userBPassword", "value": "Password123!", "type": "string" },
-    { "key": "adminEmail", "value": "", "type": "string" },
+    { "key": "adminEmail", "value": "admin@example.com", "type": "string" },
     { "key": "adminPassword", "value": "Password123!", "type": "string" },
     { "key": "userAToken", "value": "", "type": "string" },
     { "key": "userBToken", "value": "", "type": "string" },
@@ -58,17 +58,17 @@
       "name": "Auth",
       "item": [
         {
-          "name": "Register - Admin",
+          "name": "Login - Admin",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\"firstName\":\"Admin\",\"lastName\":\"Postman\",\"email\":\"{{adminEmail}}\",\"password\":\"{{adminPassword}}\",\"role\":\"ADMIN\"}",
+              "raw": "{\"email\":\"{{adminEmail}}\",\"password\":\"{{adminPassword}}\"}",
               "options": { "raw": { "language": "json" } }
             },
-            "url": { "raw": "{{gatewayUrl}}/auth/register", "host": ["{{gatewayUrl}}"], "path": ["auth", "register"] },
-            "description": "Public endpoint. Registers an ADMIN user (role is client-suppliable at register time - a known, documented tradeoff, not something this collection needs to work around)."
+            "url": { "raw": "{{gatewayUrl}}/auth/login", "host": ["{{gatewayUrl}}"], "path": ["auth", "login"] },
+            "description": "#74: POST /auth/register can no longer produce an ADMIN account - a client-supplied role is silently ignored, always USER. This logs in against an account provisioned out-of-band by AdminBootstrap (app.admin.bootstrap.enabled=true, ADMIN_EMAIL/ADMIN_PASSWORD matching adminEmail/adminPassword below). If this fails with 401, the stack was started without admin bootstrap enabled - see postman/README.md."
           },
           "event": [
             {
@@ -84,6 +84,14 @@
                   "pm.collectionVariables.set('adminRefreshToken', token.refreshToken);",
                   "pm.test('Response body is a JWT (3 dot-separated parts)', function () {",
                   "    pm.expect(token.split('.').length).to.eql(3);",
+                  "});",
+                  "function decodeJwt(t) {",
+                  "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "    while (payload.length % 4) payload += '=';",
+                  "    return JSON.parse(atob(payload));",
+                  "}",
+                  "pm.test('Token role is ADMIN', function () {",
+                  "    pm.expect(decodeJwt(token).role).to.eql('ADMIN');",
                   "});"
                 ]
               }
@@ -1214,15 +1222,15 @@
             "method": "POST",
             "header": [
               { "key": "Content-Type", "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":25.0}",
+              "raw": "{\"targetUserId\":{{userAId}},\"activityId\":{{thresholdActivityId}},\"xp\":25.0}",
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
-            "description": "No userId field in the body - the acting user is derived server-side from the JWT via the Gateway-injected 'userId' header."
+            "description": "#74: POST /api/level is now admin-only - awards XP to targetUserId rather than the caller. Requires adminToken (see Auth > Login - Admin)."
           },
           "event": [
             {
@@ -1381,7 +1389,7 @@
             "method": "POST",
             "header": [
               { "key": "Content-Type", "value": "application/json" },
-              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
             ],
             "body": {
               "mode": "raw",
@@ -1398,6 +1406,69 @@
                 "exec": [
                   "pm.test('Status is 400', function () {",
                   "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create-Update XP - Over Per-Award Cap Rejected (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":50000}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
+            "description": "#74: ManualXpAwardRequest.xp carries @DecimalMax(10000.0) - blocks the arbitrary-XP-mint the endpoint used to allow, while comfortably clearing the richest realistic single logged session (~4,860 XP)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test('ProblemDetail names the per-award cap', function () {",
+                  "    pm.expect(pm.response.json().detail).to.include('exceeds the per-award cap');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create-Update XP - Rejected For Non-Admin (403)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":5}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
+            "description": "#74: POST /api/level used to be reachable by any authenticated user - now gated hasRole(\"ADMIN\") at the Gateway. A plain USER token must be rejected outright, before the body is even considered."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', function () {",
+                  "    pm.response.to.have.status(403);",
                   "});"
                 ]
               }
@@ -1420,12 +1491,12 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{userAToken}}"
+                "value": "Bearer {{adminToken}}"
               }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":200.0}",
+              "raw": "{\"targetUserId\":{{userAId}},\"activityId\":{{thresholdActivityId}},\"xp\":200.0}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1442,7 +1513,7 @@
                 "level"
               ]
             },
-            "description": "Setup step, not itself the feature under test: thresholdActivityId already has 25 XP from the Level Tracker folder (no threshold row seeded yet - that happens later, in Activity Level Threshold). +200 more crosses the default curve's level-2 boundary (100 XP), guaranteeing a LevelUpEvent this run can check for below."
+            "description": "Setup step, not itself the feature under test: thresholdActivityId already has 25 XP from the Level Tracker folder (no threshold row seeded yet - that happens later, in Activity Level Threshold). +200 more crosses the default curve's level-2 boundary (100 XP), guaranteeing a LevelUpEvent this run can check for below. #74: POST /api/level is admin-only now, so this uses adminToken with an explicit targetUserId to keep the XP landing on User A."
           },
           "event": [
             {
@@ -2259,7 +2330,7 @@
       "name": "Security - IDOR Verification",
       "item": [
         {
-          "name": "Write XP As Self (No Spoofed Header)",
+          "name": "Log Activity As Self (No Spoofed Header)",
           "request": {
             "method": "POST",
             "header": [
@@ -2268,13 +2339,26 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":5}",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{idorLogStartTime}}\",\"endTime\":\"{{idorLogEndTime}}\",\"notes\":\"Postman IDOR baseline\"}",
               "options": { "raw": { "language": "json" } }
             },
-            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
-            "description": "Baseline: a normal write with no userId in the body and no manually-set userId header. The Gateway must inject User A's id from the JWT."
+            "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
+            "description": "Baseline: a normal write with no userId in the body and no manually-set userId header. The Gateway must inject User A's id from the JWT. (#74: retargeted from POST /api/level, which is now admin-only and no longer demonstrates this - POST /api/activitylog uses the identical userId-header-trust mechanism.)"
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "var start = new Date(now - 20 * 60000).toISOString().split('.')[0];",
+                  "var end = new Date(now).toISOString().split('.')[0];",
+                  "pm.variables.set('idorLogStartTime', start);",
+                  "pm.variables.set('idorLogEndTime', end);"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -2292,7 +2376,7 @@
           ]
         },
         {
-          "name": "Write XP With Forged userId Header (Spoof Neutralized)",
+          "name": "Log Activity With Forged userId Header (Spoof Neutralized)",
           "request": {
             "method": "POST",
             "header": [
@@ -2302,13 +2386,26 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":5}",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{idorSpoofLogStartTime}}\",\"endTime\":\"{{idorSpoofLogEndTime}}\",\"notes\":\"Postman IDOR spoof attempt\"}",
               "options": { "raw": { "language": "json" } }
             },
-            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
-            "description": "The core IDOR regression test: authenticated as User A, but the request manually forges a 'userId' header pointing at User B. UserIdHeaderFilter must overwrite this header before the request is routed downstream, so the write still lands on User A, never User B."
+            "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
+            "description": "The core IDOR regression test: authenticated as User A, but the request manually forges a 'userId' header pointing at User B. UserIdHeaderFilter must overwrite this header before the request is routed downstream, so the log still lands on User A, never User B. (#74: retargeted from POST /api/level, which is now admin-only and takes its XP target from an explicit targetUserId body field rather than the userId header, so it no longer demonstrates this mechanism.)"
           },
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "var start = new Date(now - 20 * 60000).toISOString().split('.')[0];",
+                  "var end = new Date(now).toISOString().split('.')[0];",
+                  "pm.variables.set('idorSpoofLogStartTime', start);",
+                  "pm.variables.set('idorSpoofLogEndTime', end);"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -2318,10 +2415,10 @@
                   "    pm.response.to.have.status(200);",
                   "});",
                   "var json = pm.response.json();",
-                  "pm.test('Forged header is ignored - XP is still credited to User A, the authenticated caller', function () {",
+                  "pm.test('Forged header is ignored - log is still credited to User A, the authenticated caller', function () {",
                   "    pm.expect(String(json.userId)).to.eql(pm.collectionVariables.get('userAId'));",
                   "});",
-                  "pm.test('XP was NOT credited to User B, the spoofed target', function () {",
+                  "pm.test('Log was NOT credited to User B, the spoofed target', function () {",
                   "    pm.expect(String(json.userId)).to.not.eql(pm.collectionVariables.get('userBId'));",
                   "});"
                 ]

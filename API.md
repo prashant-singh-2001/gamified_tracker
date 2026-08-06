@@ -47,9 +47,9 @@ Authorization: Bearer <token>
 
 Tokens are signed HS256 JWTs and carry the user's `role` as a claim. The signing secret and expiry both come from config (`jwt.secret` / `jwt.expiration`, see `.env` / `JWT_SECRET` / `JWT_EXPIRATION`).
 
-`SecurityConfig` configures the OAuth2 Resource Server, validates JWTs via the configured `JwtDecoder`, and uses a `JwtAuthenticationConverter` to derive Spring Security authorities from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level** using `.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")`. An `ADMIN` token succeeds on `POST /api/activity`; any other role receives `403 Forbidden`.
+`SecurityConfig` configures the OAuth2 Resource Server, validates JWTs via the configured `JwtDecoder`, and uses a `JwtAuthenticationConverter` to derive Spring Security authorities from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level**, e.g. `.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")` — three such matchers exist today (`POST /api/activity`, `/api/activitylog/review/**`, `POST /api/level`). An `ADMIN` token succeeds on all three; any other role receives `403 Forbidden`. **The only way to obtain an `ADMIN` token is via an out-of-band-provisioned account** — `POST /auth/register` always assigns `Role.USER` regardless of what the client sends (see `AdminBootstrap` under Auth below).
 
-**Caller identity on writes:** the JWT also carries a `userId` claim (the numeric `User.id`, set at register/login). `UserIdHeaderFilter` reads it and injects a trusted `userId` HTTP header on the request before it is routed downstream — overwriting/normalizing any `userId` header the client sent, so it can't be spoofed. `POST /api/activitylog` and `POST /api/level` derive the acting user from this trusted header rather than from the request body (see those endpoints below); the body no longer accepts a `userId` field at all.
+**Caller identity on writes:** the JWT also carries a `userId` claim (the numeric `User.id`, set at register/login). `UserIdHeaderFilter` reads it and injects a trusted `userId` HTTP header on the request before it is routed downstream — overwriting/normalizing any `userId` header the client sent, so it can't be spoofed. `POST /api/activitylog` derives the acting user entirely from this trusted header; `POST /api/level` uses it to identify the **acting admin** (for the audit trail) while the XP **target** user is a separate, explicit field in the body (see that endpoint below) — neither body ever accepts a raw `userId` field.
 
 ---
 
@@ -67,7 +67,8 @@ Creates a user and returns a JWT. Public (no token required).
 | `lastName` | String | |
 | `email` | String | must be unique |
 | `password` | String | hashed with BCrypt before storage |
-| `role` | String enum: `USER`, `ADMIN` | optional; defaults to `USER` if omitted. Note: this means any caller can self-register as `ADMIN` — acceptable for this demo app, not production-safe |
+
+**No `role` field** — every account created here is `Role.USER`, unconditionally (issue #74; a client-supplied `role` used to be honored, letting any unauthenticated caller self-promote to `ADMIN` on this `permitAll` endpoint). An `ADMIN` account can only be provisioned out-of-band via `AdminBootstrap`, an `ApplicationRunner` gated by `app.admin.bootstrap.enabled` (off by default — see `.env.example`), which creates or promotes the configured email at startup.
 
 **Response:** `200 OK`, body is a raw JWT string (not JSON-wrapped), with the saved role embedded as a claim.
 
@@ -208,11 +209,25 @@ Both `POST` endpoints return the updated `ActivityLogResponse` (`200 OK`), or `4
 |--------|------|------|-------------|
 | `GET` | `/api/level` | authenticated | list every level-tracker row (all users, all activities) — open read |
 | `GET` | `/api/level/{id}` | authenticated | one row by internal id (`404` if missing) — open read, any user's row |
-| `POST` | `/api/level` | authenticated | create-or-update XP for **the caller's own** activity, recalculating level. Since issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16), this is no longer called by the Activity Service directly — that happens asynchronously via a RabbitMQ consumer instead (see `POST /api/activitylog` above). This endpoint is still live for direct callers and is a real, synchronous write |
+| `POST` | `/api/level` | **ADMIN** | manually award XP to an activity, recalculating level. See below — not a general-purpose write, and not what the normal activity-logging flow uses |
 | `GET` | `/api/level/user/{userId}` | authenticated | all rows for a given user — open read, `{userId}` can be anyone. **This is where the real, eventual `leveledUp` outcome of a `POST /api/activitylog` becomes visible**, shortly after the async XP application completes |
 | `GET` | `/api/level/activity/{activityId}` | authenticated | all rows for a given activity |
 
-All reads here are **intentionally open** — any authenticated player can view any other player's level/XP stats (see [Authentication](#authentication) and [Gamification Service § Level Tracker](#level-tracker-1)). `POST` is the one write: the `userId` field has been removed from the request body — the acting user comes from the trusted `userId` header instead, so XP can only ever be granted to the caller. Request/response bodies otherwise mirror the Gamification Service (`activityId`, `level`, `totalXp`, `currentLevelXp`, `leveledUp`) — **`leveledUp` is only ever `true` on the `POST` response that actually crossed a threshold; every `GET` endpoint here hardcodes it to `false`**, regardless of the row's real state.
+All reads here are **intentionally open** — any authenticated player can view any other player's level/XP stats (see [Authentication](#authentication) and [Gamification Service § Level Tracker](#level-tracker-1)).
+
+**`POST /api/level` used to be a public, unbounded XP mint — fixed in issue #74.** Before the fix, any authenticated user could call it with an arbitrary `activityId`/`xp` and grant themselves unlimited XP, bypassing activity-service, the outbox, and the idempotency guard entirely. It's now:
+- **Gated `hasRole("ADMIN")`** at the Gateway — a non-admin token gets `403`.
+- **Capped at 10,000 XP per call** (`@DecimalMax` on the request's `xp` field) — comfortably above the richest realistic single logged session (~4,860 XP), but well short of an arbitrary mint. A request over the cap is `400` with a message naming the limit.
+- **Audited.** Every call writes a `manual_xp_award` row (acting admin, target user, activity, xp, timestamp) before the XP is applied — see [Concurrency-Safe XP Accumulation](docs/features/concurrency-safe-xp.md).
+
+**Request body:**
+| Field | Type | Notes |
+|---|---|---|
+| `targetUserId` | Long | optional — the user to award XP to. Omit to award to the calling admin's own account |
+| `activityId` | Long | required |
+| `xp` | double | `@PositiveOrZero`, capped at `10000.0` |
+
+Request/response bodies otherwise mirror the Gamification Service (`activityId`, `level`, `totalXp`, `currentLevelXp`, `leveledUp`) — **`leveledUp` is only ever `true` on the `POST` response that actually crossed a threshold; every `GET` endpoint here hardcodes it to `false`**, regardless of the row's real state. The normal way a player earns XP remains `POST /api/activitylog`, applied asynchronously — this endpoint is a separate, admin-only manual-award tool, not an alternate path for players to grant themselves XP.
 
 ---
 
@@ -367,15 +382,16 @@ List every `LevelTracker` row (all users, all activities).
 Fetch one `LevelTracker` by its internal numeric id. `200 OK` or `404` `ProblemDetail` (`"LevelTracker with id: {id} not found"`).
 
 #### `POST /level`
-Create-or-update a user's XP for an activity, recalculating level. Reads `userId` from the `userId` request header (required), not the body — trustworthy through the Gateway, caller-supplied if hit directly on `:8082`.
+**Admin-only manual XP award (issue #74)** — `LevelTrackerController.awardXpManually`. Reads the acting admin's id from the `userId` request header (required) — trustworthy through the Gateway, caller-supplied if hit directly on `:8082`, since this service has no security layer of its own (the `hasRole("ADMIN")` gate is Gateway-only; see the caveat on the review endpoints below for the same limitation). Was previously `createLevelTracker`, a public, unbounded write reachable by any authenticated user — see [Concurrency-Safe XP Accumulation](docs/features/concurrency-safe-xp.md) for the fix.
 
-**Two callers now** (since issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)): this HTTP endpoint (still reachable directly, unchanged), and `ActivityLoggedListener`, a `@RabbitListener` that calls `LevelTrackerServiceImpl.save(userId, dto)` **in-process** for each async `ActivityLogged` event — the consumer path doesn't go through this controller or the `userId` header at all; `userId` comes from the event payload instead, and duplicate deliveries are deduped against a `processed_event` table before `save` is ever invoked.
+**Two callers now:** this HTTP endpoint, and `ActivityLoggedListener`, a `@RabbitListener` that calls `LevelTrackerServiceImpl.save(userId, dto)` **in-process** for each async `ActivityLogged` event — the consumer path doesn't go through this controller, the `userId` header, or the admin gate at all; `userId` comes from the event payload instead, and duplicate deliveries are deduped against a `processed_event` table before `save` is ever invoked. This HTTP endpoint no longer calls `save` directly either — it goes through `awardManually`, which writes a `manual_xp_award` audit row first, then delegates to the same `save`.
 
 **Request body:**
 | Field | Type | Notes |
 |---|---|---|
-| `activityId` | Long | |
-| `xp` | double | XP to add. Carries `@PositiveOrZero` — a negative value fails Bean Validation with a `400`, but gamification-service has no handler for that exception, so the body is **not** this service's usual `ProblemDetail` shape (see [Error Handling § Known edges](docs/features/error-handling.md)) |
+| `targetUserId` | Long | optional — defaults to the acting admin (the `userId` header) when omitted |
+| `activityId` | Long | required |
+| `xp` | double | `@PositiveOrZero` **and** `@DecimalMax(10000.0)` — either violation is `400` with the specific message (e.g. `"xp exceeds the per-award cap of 10000"`), via gamification-service's `MethodArgumentNotValidException` handler added alongside this fix (previously this service had no such handler at all — see [Error Handling § Known edges](docs/features/error-handling.md)) |
 
 **Response:** `200 OK`, the resulting `LevelTrackerDto` (shape above, including the real `leveledUp` value for this call). Level-up logic: crosses the highest `ActivityLevelThreshold` whose `xpRequired` is ≤ the new total XP for that activity; `currentLevelXp` becomes `totalXp − threshold.xpRequired`.
 
@@ -461,11 +477,12 @@ All previously-tracked issues in this section have been resolved and verified en
 
 - ~~`ActivityController` route bug (stray whitespace) breaking `GET /activity/{name}`~~ — fixed.
 - ~~`@PreAuthorize("hasRole('ADMIN')")` inert due to missing `@EnableMethodSecurity` + the old `JwtFilter` granting no authorities~~ — fixed; non-admin tokens now get a real `403`. Authorities are now mapped from the `role` claim by `SecurityConfig`'s `JwtAuthenticationConverter`, and gating is by URL rather than `@PreAuthorize`.
-- ~~`AuthService.register` ignoring the requested `role`~~ — fixed; note the resulting tradeoff documented above (self-service `ADMIN` registration).
+- ~~`AuthService.register` ignoring the requested `role`~~ — this "fix" was itself a vulnerability (issue #74): honoring a client-supplied `role` let any unauthenticated caller self-register as `ADMIN` on the `permitAll` auth endpoint. `register` now always assigns `Role.USER`, full stop; `RegisterRequest` no longer has a `role` field to send. See `POST /auth/register` above and `AdminBootstrap` for out-of-band provisioning.
 - ~~`JwtUtil` ignoring the `jwt.expiration` config~~ — fixed; confirmed the token's `exp` claim moves when the config value changes.
 - ~~`LevelTrackerService.mapToDto` always returning `totalXp: 0.0`~~ — fixed.
 - ~~Inconsistent error shapes (raw `500`s / generic bodies instead of `ProblemDetail`)~~ — fixed for login failures and negative-`xp` validation.
 - ~~IDOR on writes: `POST /api/activitylog` and `POST /api/level` trusted a client-supplied `userId` in the body, so any authenticated user could log activities or grant XP **as any other user**~~ — fixed. The JWT now carries the numeric `userId`; `UserIdHeaderFilter` injects it as a trusted `userId` header (overwriting/stripping any client-sent value) before the request is routed downstream; the write DTOs no longer accept `userId` in the body at all. (Historical notes: this originally also covered activity-service's internal Feign call to gamification-service — that call no longer exists, see the next item. The filter was previously named `JwtFilter` and also did the token parsing; that half now belongs to Spring Security's OAuth2 resource server.)
 - ~~`POST /api/activitylog` called Gamification Service *before* saving the log, so a gamification outage lost the activity log entirely~~ ([#4](https://github.com/prashant-singh-2001/gamified_tracker/issues/4)) — fixed via event-driven decoupling ([#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)): the log is saved first, an outbox row is written in the same transaction, and XP is applied asynchronously by a RabbitMQ consumer. Trade-off: `leveledUp` is no longer available synchronously — see the Level Tracker/Activity Log sections above. See [`EVENT_DRIVEN_DECOUPLING.md`](docs/features/event-driven-decoupling.md).
+- ~~`POST /api/level` let any authenticated user mint arbitrary XP for themselves~~ ([#74](https://github.com/prashant-singh-2001/gamified_tracker/issues/74)) — fixed: gated `hasRole("ADMIN")` at the Gateway, capped at 10,000 XP per call, and every call now writes a `manual_xp_award` audit row. See the Level Tracker sections above and [Concurrency-Safe XP Accumulation](docs/features/concurrency-safe-xp.md).
 
-Remaining non-issues, documented for awareness rather than as defects: `createdAt` is always server-set (client-supplied values on create endpoints are accepted but ignored); any caller can self-register as `ADMIN` (acceptable for a demo app); **reads are intentionally open** — any authenticated user can view any other user's activity logs and level/XP stats (`GET .../{id}`, `GET .../user/{id}`) as a deliberate social/leaderboard-style feature, not an access-control gap; **`bonusApplied`/`bonusMultiplier` are only ever real on the specific `POST` response that computed them** — every `GET` endpoint that returns an `ActivityLogResponse` hardcodes them to `false`/`1.0`, since they're not persisted, only computed in-memory at creation time; and **`leveledUp` is now `false` everywhere except the `POST /api/level`/`POST /level` response that actually crossed a threshold** (including on `POST /api/activitylog`/`POST /activitylog/`, since that write no longer applies XP synchronously — see Event-Driven Decoupling above). Direct calls to `:8081`/`:8082` bypassing the Gateway are also unauthenticated, since neither service has its own security layer — the `userId` header is only trustworthy when it arrives via the Gateway.
+Remaining non-issues, documented for awareness rather than as defects: `createdAt` is always server-set (client-supplied values on create endpoints are accepted but ignored); **reads are intentionally open** — any authenticated user can view any other user's activity logs and level/XP stats (`GET .../{id}`, `GET .../user/{id}`) as a deliberate social/leaderboard-style feature, not an access-control gap; **`bonusApplied`/`bonusMultiplier` are only ever real on the specific `POST` response that computed them** — every `GET` endpoint that returns an `ActivityLogResponse` hardcodes them to `false`/`1.0`, since they're not persisted, only computed in-memory at creation time; and **`leveledUp` is now `false` everywhere except the `POST /api/level`/`POST /level` response that actually crossed a threshold** (including on `POST /api/activitylog`/`POST /activitylog/`, since that write no longer applies XP synchronously — see Event-Driven Decoupling above). Direct calls to `:8081`/`:8082` bypassing the Gateway are also unauthenticated, since neither service has its own security layer — the `userId` header (and, for `POST /level`, the admin role check) is only trustworthy when it arrives via the Gateway.

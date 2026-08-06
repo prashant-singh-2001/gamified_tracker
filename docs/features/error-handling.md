@@ -24,7 +24,7 @@ flowchart TB
     B -->|"ActivityNotFoundException"| C["404 ProblemDetail (activity-service)"]
     B -->|"NoSuchElementException"| D["404 ProblemDetail (gamification-service)"]
     B -->|"InactiveActivityException"| I["409 'inactive, re-enable it' (activity-service)"]
-    B -->|"MethodArgumentNotValidException<br/>InvalidTimeRangeException"| J["400 field violations joined"]
+    B -->|"MethodArgumentNotValidException<br/>(both services)<br/>InvalidTimeRangeException"| J["400 field violations joined"]
     B -->|"HttpMessageNotReadableException"| E["400 'Invalid request body'"]
     B -->|"InvalidCredentialsException"| F["401 'Invalid email or password' (gateway)"]
     B -->|no match| G["Spring default (falls through)"]
@@ -101,7 +101,7 @@ The constraints live on the request records — e.g. `ActivityLogRequest` requir
 one previously read `@FutureOrPresent`, which had the rule exactly backwards: you log time you have
 already spent, so a start time in the future is the invalid case.
 
-**gamification-service — 404 + a validation 400:**
+**gamification-service — 404, invalid-body, and (as of issue #74) a validation 400:**
 ```java
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -113,17 +113,26 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleInvalidRequestBody(HttpMessageNotReadableException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Invalid request body");
     }
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
+        String detail = ex.getBindingResult().getFieldErrors().stream()
+                .map(FieldError::getDefaultMessage)
+                .collect(Collectors.joining("; "));
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, detail);
+    }
 }
 ```
-`LevelTrackerRequestDTO`'s `xp` field carries a `@PositiveOrZero` constraint, and
-`LevelTrackerController` validates the body with `@Valid` — but gamification-service's
-`GlobalExceptionHandler` above has no `@ExceptionHandler(MethodArgumentNotValidException.class)`.
-A negative `xp` therefore never reaches this service's own `ProblemDetail` handling at all: the
-validation failure falls straight through to Spring's own default error handling instead, unlike
-activity-service (which does have that handler — see above). The DTO's leading comment block
-preserves an older, now-dead approach — a compact constructor that threw `IllegalArgumentException`
-on `xp < 0` during deserialization — commented out in favor of the declarative constraint; don't
-mistake the comment for live behavior.
+This third handler is new: until issue #74's fix, gamification-service had no
+`@ExceptionHandler(MethodArgumentNotValidException.class)` at all, so a `@Valid` failure (e.g.
+`LevelTrackerRequestDTO`'s `xp` going negative) fell straight through to Spring's own default error
+handling instead of this service's `ProblemDetail` shape — unlike activity-service, which already
+had the equivalent handler (see above). It was added specifically because `POST /level`'s new
+[per-award XP cap](concurrency-safe-xp.md) needed to reject an oversized request with a message an
+admin could actually read, rather than an opaque `400` with no body. The pattern is copied verbatim
+from activity-service's handler above. `LevelTrackerRequestDTO`'s leading comment block preserves an
+older, now-dead approach — a compact constructor that threw `IllegalArgumentException` on `xp < 0`
+during deserialization — commented out in favor of the declarative constraint; don't mistake the
+comment for live behavior.
 
 ### The errors Spring Security writes itself
 
@@ -160,17 +169,24 @@ untouched rather than re-serializing it. `GET /api/activity/does-not-exist` and
 
 - Only the exceptions above are advised; anything else falls through to Spring's defaults — there's
   no catch-all `@ExceptionHandler(Exception.class)`.
-- Bean Validation is wired in **activity-service only** — its `MethodArgumentNotValidException`
-  handler is the one shown above. gamification-service's DTOs carry constraints
-  (`@Valid`/`@PositiveOrZero` on `LevelTrackerRequestDTO`, for one) but its `GlobalExceptionHandler`
-  has no handler for the exception those constraints throw, so violations don't get this service's
-  `ProblemDetail` treatment. api-gateway's `LoginRequest`/`RegisterRequest` carry constraints too
-  (`@Email`, `@NotBlank`, `@NotNull` on `RegisterRequest.role`) but the controller has no `@Valid`
-  and the service has no validation starter on its classpath at all — those annotations are
-  currently inert. Note if that ever gets wired up: `RegisterRequest.role` is `@NotNull` while
-  `AuthService.register` explicitly defaults a null role to `Role.USER` — turning validation on
-  without removing that annotation would start rejecting the ordinary "register with no role"
-  request that default exists to support.
+- Bean Validation is now wired in **both** activity-service and gamification-service (issue #74
+  added the latter's `MethodArgumentNotValidException` handler, shown above) — but still not in
+  api-gateway. `LoginRequest`/`RegisterRequest` carry constraints (`@Email`, `@NotBlank`), and
+  `AuthController.register` **does** have `@Valid` on the body, yet the service has no validation
+  starter (`spring-boot-starter-validation`) on its classpath at all, so those annotations never
+  actually run — a blank `firstName` or malformed email is accepted rather than rejected with a 400.
+  This is unrelated to `RegisterRequest.role`, which no longer exists: issue #74 removed the field
+  entirely rather than fixing its validation, since a client-supplied role was the actual
+  vulnerability (any caller could `POST /auth/register {"role":"ADMIN"}` and self-promote) — see
+  [Authentication & Identity Propagation](authentication-and-identity.md).
+- `ConstraintViolationException` (thrown by `@Validated` + `@Positive` on a `@RequestHeader` or
+  `@PathVariable` value that's *present but invalid* — as opposed to `@Valid` on a `@RequestBody`,
+  or a header that's missing entirely, which Spring already maps to a clean `400`) has no handler in
+  either service — e.g. `POST /api/level` with `userId: -5`, or `GET /level/-1`, falls through to
+  Spring's default `500` rather than a `400` `ProblemDetail`. Not fixed alongside #74 because it's a
+  pre-existing gap `@DecimalMax` on `ManualXpAwardRequest.xp` doesn't touch — that constraint lives
+  on the `@Valid`-checked body, not a header or path variable, so it correctly produces the new
+  handler's `400` rather than this gap's `500`.
 
 ## Try it
 
@@ -178,11 +194,15 @@ untouched rather than re-serializing it. `GET /api/activity/does-not-exist` and
 curl -i http://localhost:8080/api/activity/DoesNotExist -H "Authorization: Bearer $TOKEN"   # 404 ProblemDetail
 curl -i -X POST http://localhost:8080/auth/login -H "Content-Type: application/json" \
   -d '{"email":"nobody@example.com","password":"x"}'                                         # 401 "Invalid email or password"
-curl -i -X POST http://localhost:8080/api/level -H "Authorization: Bearer $TOKEN" \
+# POST /api/level is admin-only as of #74 — $ADMIN_TOKEN needs Role.ADMIN (see AdminBootstrap in
+# Authentication & Identity Propagation). This now DOES get gamification-service's own ProblemDetail
+# shape, unlike before #74 — the new MethodArgumentNotValidException handler applies:
+curl -i -X POST http://localhost:8080/api/level -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" -d '{"activityId":1,"xp":-5}'
-# -> 400, but NOT this service's ProblemDetail shape — @Valid's MethodArgumentNotValidException
-#    has no handler in gamification-service's GlobalExceptionHandler, so it falls through to
-#    Spring's own default error handling (see "Known edges" above)
+# -> 400 "xp cannot be negative"
+curl -i -X POST http://localhost:8080/api/level -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" -d '{"activityId":1,"xp":50000}'
+# -> 400 "xp exceeds the per-award cap of 10000"
 
 # Soft-delete an activity, then try to log against it -> 409, no XP or streak side effects
 curl -i -X POST http://localhost:8080/api/activitylog -H "Authorization: Bearer $TOKEN" \
