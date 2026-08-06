@@ -28,16 +28,30 @@ public class RefreshToken {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
+    @Column(nullable = false)
     private Instant expiresAt;
 
+    private Instant usedAt;
+
+    private Instant revokedAt;
+
     @Builder.Default
-    private boolean used = false;
+    private boolean isUsed = false;
+
+    @Builder.Default
+    private boolean isRevoked = false;
 
     public boolean isExpired() {
         return Instant.now().isAfter(expiresAt);
     }
 
     public void markUsed() {
-        this.used = true;
+        this.isUsed = true;
+        this.usedAt = Instant.now();
+    }
+
+    public void revoke() {
+        this.isRevoked = true;
+        this.revokedAt = Instant.now();
     }
 }

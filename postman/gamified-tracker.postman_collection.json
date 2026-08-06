@@ -37,11 +37,16 @@
     { "key": "userAToken", "value": "", "type": "string" },
     { "key": "userBToken", "value": "", "type": "string" },
     { "key": "adminToken", "value": "", "type": "string" },
+    { "key": "adminRefreshToken", "value": "", "type": "string" },
+    { "key": "userARefreshToken", "value": "", "type": "string" },
+    { "key": "userBRefreshToken", "value": "", "type": "string" },
     { "key": "userAId", "value": "", "type": "string" },
     { "key": "userBId", "value": "", "type": "string" },
     { "key": "activityName", "value": "", "type": "string" },
     { "key": "activityLogId", "value": "", "type": "string" },
     { "key": "loggedActivityId", "value": "", "type": "string" },
+    { "key": "flaggedLogId", "value": "", "type": "string" },
+    { "key": "flaggedLogIdForRejection", "value": "", "type": "string" },
     { "key": "thresholdActivityId", "value": "1", "type": "string" },
     { "key": "curveActivityId", "value": "", "type": "string" },
     { "key": "rlAttempts", "value": "0", "type": "string" },
@@ -74,8 +79,9 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
-                  "pm.collectionVariables.set('adminToken', token);",
+                  "var token = pm.response.json();",
+                  "pm.collectionVariables.set('adminToken', token.accessToken);",
+                  "pm.collectionVariables.set('adminRefreshToken', token.refreshToken);",
                   "pm.test('Response body is a JWT (3 dot-separated parts)', function () {",
                   "    pm.expect(token.split('.').length).to.eql(3);",
                   "});"
@@ -95,7 +101,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/auth/register", "host": ["{{gatewayUrl}}"], "path": ["auth", "register"] },
-            "description": "Registers a plain USER (role omitted, defaults to USER). Decodes the returned JWT to capture the numeric userId claim used throughout the rest of the collection."
+            "description": "Registers a plain USER (role omitted, defaults to USER). Returns an Access Token (JWT) and a Refresh Token. Decodes the returned JWT to capture the numeric userId claim used throughout the rest of the collection."
           },
           "event": [
             {
@@ -106,8 +112,9 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
-                  "pm.collectionVariables.set('userAToken', token);",
+                  "var token = pm.response.json();",
+                  "pm.collectionVariables.set('userAToken', token.accessToken);",
+                  "pm.collectionVariables.set('userARefreshToken', token.refreshToken);",
                   "function decodeJwt(t) {",
                   "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
                   "    while (payload.length % 4) payload += '=';",
@@ -148,8 +155,9 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
-                  "pm.collectionVariables.set('userBToken', token);",
+                  "var token = pm.response.json();",
+                  "pm.collectionVariables.set('userBToken', token.accessToken);",
+                  "pm.collectionVariables.set('userBRefreshToken', token.refreshToken);",
                   "function decodeJwt(t) {",
                   "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
                   "    while (payload.length % 4) payload += '=';",
@@ -176,7 +184,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/auth/login", "host": ["{{gatewayUrl}}"], "path": ["auth", "login"] },
-            "description": "Confirms login works independently of register and returns a token for the same identity."
+            "description": "Confirms login works independently of register and returns an access token and refresh token. for the same identity."
           },
           "event": [
             {
@@ -187,7 +195,7 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
+                  "var token = pm.response.json();",
                   "function decodeJwt(t) {",
                   "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
                   "    while (payload.length % 4) payload += '=';",
@@ -231,6 +239,59 @@
                   "    var json = pm.response.json();",
                   "    pm.expect(json.detail).to.eql('Invalid email or password');",
                   "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refreshToken\":\"{{userARefreshToken}}\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/auth/refresh",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Consumes the current refresh token and returns a new access token and refresh token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "",
+                  "pm.expect(json.accessToken).to.not.be.empty;",
+                  "pm.expect(json.refreshToken).to.not.be.empty;",
+                  "",
+                  "pm.collectionVariables.set('userAToken', json.accessToken);",
+                  "pm.collectionVariables.set('userARefreshToken', json.refreshToken);"
                 ]
               }
             }
@@ -599,6 +660,544 @@
                   "        pm.expect(entry.currentStreak).to.be.at.least(1);",
                   "    });",
                   "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Activity Log - Future EndTime Rejected (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{futureLogStartTime}}\",\"endTime\":\"{{futureLogEndTime}}\",\"notes\":\"Postman automated test - future session\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
+            "description": "Issue #67 (session integrity), layer 0. endTime is now @PastOrPresent, not just @NotNull - a request with endTime in the future used to be accepted outright and award XP for a session that hadn't happened yet (endTime = now + 10 years awarded millions of minutes of XP from one call). Must be 400."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "var start = new Date(now).toISOString().split('.')[0];",
+                  "var end = new Date(now + 24 * 60 * 60000).toISOString().split('.')[0];",
+                  "pm.variables.set('futureLogStartTime', start);",
+                  "pm.variables.set('futureLogEndTime', end);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Activity Log - Over Duration Cap Rejected (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{overCapLogStartTime}}\",\"endTime\":\"{{overCapLogEndTime}}\",\"notes\":\"Postman automated test - over duration cap\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
+            "description": "Issue #67, layer 1. A 1500-minute (25 hour) session exceeds the 1440-minute (session-integrity.max-duration-minutes) hard cap - impossible input, rejected outright rather than flagged for review. Both timestamps are in the past, so this isolates the duration cap from the endTime validation above."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "var start = new Date(now - 1500 * 60000).toISOString().split('.')[0];",
+                  "var end = new Date(now).toISOString().split('.')[0];",
+                  "pm.variables.set('overCapLogStartTime', start);",
+                  "pm.variables.set('overCapLogEndTime', end);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test('ProblemDetail explains the duration cap', function () {",
+                  "    pm.expect(pm.response.json().detail).to.include('exceeds the maximum allowed');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Session Integrity Review (#67)",
+      "item": [
+        {
+          "name": "Create Activity Log - Flagged as Implausible",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{flaggedLogStartTime}}\",\"endTime\":\"{{flaggedLogEndTime}}\",\"notes\":\"Postman automated test - implausible session\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
+            "description": "Issue #67, layer 2. A 700-minute session is under the 1440-minute hard cap (so it's accepted, not rejected) but over the 600-minute absolute-flag-minutes threshold, so it flags unconditionally regardless of any prior baseline - no seed data needed for this demo. The log is still saved (visible to the user, streak still advances) but no outbox row is written, so no XP reaches the leaderboard until a maintainer approves it."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "var start = new Date(now - 700 * 60000).toISOString().split('.')[0];",
+                  "var end = new Date(now).toISOString().split('.')[0];",
+                  "pm.variables.set('flaggedLogStartTime', start);",
+                  "pm.variables.set('flaggedLogEndTime', end);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set('flaggedLogId', String(json.id));",
+                  "pm.test('reviewStatus is FLAGGED', function () {",
+                  "    pm.expect(json.reviewStatus).to.eql('FLAGGED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Flagged Logs (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/review/flagged",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "review", "flagged"]
+            },
+            "description": "The admin review queue. Each entry pairs the flagged log with the detector's recomputed verdict (median, modifiedZScore, sampleSize, basis) so a maintainer can see why it was flagged."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('flaggedLogId')) {",
+                  "    pm.test.skip('Skipped - no flaggedLogId (Create Activity Log - Flagged as Implausible likely failed)');",
+                  "} else {",
+                  "    pm.test('Status is 200', function () {",
+                  "        pm.response.to.have.status(200);",
+                  "    });",
+                  "    var json = pm.response.json();",
+                  "    pm.test('Response is an array', function () {",
+                  "        pm.expect(json).to.be.an('array');",
+                  "    });",
+                  "    pm.test('Contains the log flagged earlier', function () {",
+                  "        var ids = json.map(function (item) { return String(item.activityLog.id); });",
+                  "        pm.expect(ids).to.include(pm.collectionVariables.get('flaggedLogId'));",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Flagged Logs - Forbidden (Non-Admin)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/review/flagged",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "review", "flagged"]
+            },
+            "description": "A plain USER token must be rejected - the review queue and its approve/reject transitions are maintainer-only, gated at the Gateway (hasRole(\"ADMIN\")), same pattern as POST /api/activity."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve Flagged Log (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/review/{{flaggedLogId}}/approve",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "review", "{{flaggedLogId}}", "approve"]
+            },
+            "description": "FLAGGED -> APPROVED, and writes the outbox row that was withheld at creation time - the existing 2-second OutboxRelay then applies the originally-computed xpEarned exactly as if the log had never been flagged."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('flaggedLogId')) {",
+                  "    pm.test.skip('Skipped - no flaggedLogId (Create Activity Log - Flagged as Implausible likely failed)');",
+                  "} else {",
+                  "    pm.test('Status is 200', function () {",
+                  "        pm.response.to.have.status(200);",
+                  "    });",
+                  "    pm.test('reviewStatus is APPROVED', function () {",
+                  "        pm.expect(pm.response.json().reviewStatus).to.eql('APPROVED');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve Already-Approved Log - Conflict (409)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/review/{{flaggedLogId}}/approve",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "review", "{{flaggedLogId}}", "approve"]
+            },
+            "description": "Re-approving an already-APPROVED log must be refused, not silently accepted - a second success here would mean a second outbox row and a double XP award."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('flaggedLogId')) {",
+                  "    pm.test.skip('Skipped - no flaggedLogId (Create Activity Log - Flagged as Implausible likely failed)');",
+                  "} else {",
+                  "    pm.test('Status is 409', function () {",
+                  "        pm.response.to.have.status(409);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Activity Log - Flagged for Rejection Test",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{flaggedLogStartTime2}}\",\"endTime\":\"{{flaggedLogEndTime2}}\",\"notes\":\"Postman automated test - implausible session for reject flow\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
+            "description": "A second flagged log, kept separate from flaggedLogId above so the approve and reject paths can each be demonstrated on their own log rather than racing to transition the same one."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "var start = new Date(now - 750 * 60000).toISOString().split('.')[0];",
+                  "var end = new Date(now).toISOString().split('.')[0];",
+                  "pm.variables.set('flaggedLogStartTime2', start);",
+                  "pm.variables.set('flaggedLogEndTime2', end);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.collectionVariables.set('flaggedLogIdForRejection', String(json.id));",
+                  "pm.test('reviewStatus is FLAGGED', function () {",
+                  "    pm.expect(json.reviewStatus).to.eql('FLAGGED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject Flagged Log (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/review/{{flaggedLogIdForRejection}}/reject",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "review", "{{flaggedLogIdForRejection}}", "reject"]
+            },
+            "description": "FLAGGED -> REJECTED. No outbox row is ever written for this log - no compensation logic is needed since nothing was written at creation time."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('flaggedLogIdForRejection')) {",
+                  "    pm.test.skip('Skipped - no flaggedLogIdForRejection (Create Activity Log - Flagged for Rejection Test likely failed)');",
+                  "} else {",
+                  "    pm.test('Status is 200', function () {",
+                  "        pm.response.to.have.status(200);",
+                  "    });",
+                  "    pm.test('reviewStatus is REJECTED', function () {",
+                  "        pm.expect(pm.response.json().reviewStatus).to.eql('REJECTED');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve Flagged Log - Forbidden (Non-Admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/review/{{flaggedLogIdForRejection}}/approve",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "review", "{{flaggedLogIdForRejection}}", "approve"]
+            },
+            "description": "A plain USER token must be rejected before the review-state check even runs - the log is already REJECTED at this point, but the 403 from the Gateway's role gate takes precedence over the 409 the service would otherwise return."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Analytics",
+      "item": [
+        {
+          "name": "Category Summary (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/category-summary",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "category-summary"
+              ]
+            },
+            "description": "Aggregated in-memory over activity_log grouped by Category (not a SQL GROUP BY) - see docs/features/analytics.md. The log created earlier in this run should show up under its HEALTH category."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "if (!pm.collectionVariables.get('activityLogId')) {",
+                  "    pm.test.skip('Skipped - no activityLogId (Create Activity Log likely failed, see that request)');",
+                  "} else {",
+                  "    pm.test('Contains a HEALTH entry with at least 1 session (the activity created earlier is HEALTH)', function () {",
+                  "        var entry = json.find(function (s) { return s.category === 'HEALTH'; });",
+                  "        pm.expect(entry).to.not.be.undefined;",
+                  "        pm.expect(entry.totalSessions).to.be.at.least(1);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "XP Over Time - 7 Days (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/xp-over-time?days=7",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "xp-over-time"
+              ],
+              "query": [
+                {
+                  "key": "days",
+                  "value": "7"
+                }
+              ]
+            },
+            "description": "Zero-filled daily timeline - always returns exactly `days` entries, even for days with no logs, so a client can chart a continuous line without patching gaps itself."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Exactly 7 entries, one per day, zero-filled', function () {",
+                  "    pm.expect(json.length).to.eql(7);",
+                  "});",
+                  "pm.test(\"today's entry (last, since the range ends today) has non-negative XP\", function () {",
+                  "    var today = json[json.length - 1];",
+                  "    pm.expect(today.totalXpEarned).to.be.at.least(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Weekly Report (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/weekly-report",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "weekly-report"
+              ]
+            },
+            "description": "Both the current and previous 7-day windows are fetched in a single query, then partitioned in memory. percentageChange is 100 (not Infinity) when the previous week was zero and this week isn't."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response has the expected fields', function () {",
+                  "    pm.expect(json).to.have.property('currentWeekXp');",
+                  "    pm.expect(json).to.have.property('previousWeekXp');",
+                  "    pm.expect(json).to.have.property('percentageChange');",
+                  "    pm.expect(json).to.have.property('dailyBreakdown');",
+                  "});",
+                  "pm.test('dailyBreakdown has exactly 7 zero-filled entries', function () {",
+                  "    pm.expect(json.dailyBreakdown.length).to.eql(7);",
+                  "});"
                 ]
               }
             }

@@ -13,6 +13,7 @@ territory.
 | [Authentication & Identity Propagation](authentication-and-identity.md) | JWT issuance, validation delegated to Spring Security's OAuth2 resource server, and the IDOR fix: why overriding `getHeader()` alone wasn't enough, and what closes it |
 | [Rate Limiting](rate-limiting.md) | Redis-backed Bucket4j on the Server MVC gateway (not the reactive `RequestRateLimiter`) — two independent throttles for two different reasons |
 | [API Gateway Routing](api-gateway-routing.md) | Java-DSL declarative routing, `lb://` load balancing, and why routes moved out of YAML |
+| [Session Integrity](session-integrity.md) | A from-scratch Iglewicz-Hoaglin outlier detector with three fallback tiers, an absolute threshold and daily cap closing a self-consistency gap the statistics alone couldn't catch, and a quarantine-not-reject admin review workflow |
 
 ## Event-Driven Core
 
@@ -59,6 +60,7 @@ territory.
 | Auth & identity propagation | api-gateway | `security/SecurityConfig.java`, `security/UserIdHeaderFilter.java` |
 | Rate limiting | api-gateway | `config/RateLimitConfig.java` |
 | Gateway routing | api-gateway | `config/RouteConfiguration.java` |
+| Session integrity | activity-service | `domain/DurationOutlierDetector.java`, `service/DurationOutlierEvaluationService.java` |
 | Event-driven decoupling | activity-service, gamification-service, contracts | `service/impl/ActivityLogServiceImpl.java`, `contracts/.../event/ActivityLoggedEvent.java` |
 | Concurrency-safe XP | gamification-service | `service/impl/LevelTrackerServiceImpl.java` |
 | Leveling engine | activity-service, gamification-service | `dao/Activity.java`, `domain/LevelOutcome.java`, `domain/LevelCurve.java` |

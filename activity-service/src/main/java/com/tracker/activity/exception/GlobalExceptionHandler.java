@@ -27,6 +27,16 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
 
+    @ExceptionHandler(ImplausibleSessionException.class)
+    public ProblemDetail handleImplausibleSession(ImplausibleSessionException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
+
+    @ExceptionHandler(ReviewStateConflictException.class)
+    public ProblemDetail handleReviewStateConflict(ReviewStateConflictException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
     // since @Valid can throw MethodArgumentNotValidException instead of custom exception
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {

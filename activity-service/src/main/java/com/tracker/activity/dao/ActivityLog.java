@@ -39,4 +39,12 @@ public class ActivityLog {
     private String notes;
 
     private LocalDateTime createdAt;
+
+    // Session integrity (#67): quarantine state. @Builder.Default is load-bearing — without it
+    // every builder call (mapToActivityLog, test fixtures) leaves this null and the
+    // nullable = false column blows up at flush.
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    @Builder.Default
+    private ReviewStatus reviewStatus = ReviewStatus.CLEARED;
 }

@@ -6,7 +6,6 @@ import com.tracker.gateway.user.RefreshToken;
 import com.tracker.gateway.user.User;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -18,9 +17,11 @@ public class RefreshTokenService {
     private long refreshExpiration;
 
     private final RefreshTokenRepository refreshTokenRepository;
+    private final RefreshTokenRevocationService refreshTokenRevocationService;
 
-    public RefreshTokenService(RefreshTokenRepository refreshTokenRepository) {
+    public RefreshTokenService(RefreshTokenRepository refreshTokenRepository, RefreshTokenRevocationService refreshTokenRevocationService) {
         this.refreshTokenRepository = refreshTokenRepository;
+        this.refreshTokenRevocationService = refreshTokenRevocationService;
     }
 
     public RefreshToken generateRefreshToken(User user) {
@@ -28,43 +29,35 @@ public class RefreshTokenService {
                 .token(UUID.randomUUID().toString())
                 .user(user)
                 .expiresAt(Instant.now().plusMillis(refreshExpiration))
-                .used(false)
+                .isUsed(false)
+                .isRevoked(false)
                 .build();
 
         return refreshTokenRepository.save(refreshToken);
     }
 
-    @Transactional
     public RefreshToken validateRefreshToken(String token) {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(token)
                 .orElseThrow(() -> new InvalidCredentialsException("Refresh token not found"));
 
+        if (refreshToken.isRevoked()) {
+            throw new InvalidCredentialsException("Refresh token has been revoked.");
+        }
+
         if (refreshToken.isExpired()) {
-            revoke(refreshToken.getToken());
+            refreshTokenRevocationService.revoke(refreshToken);
             throw new InvalidCredentialsException("Refresh token expired, please log in again");
         }
 
-        if (refreshToken.isUsed()) {
-            revokeAllForUser(refreshToken.getUser().getId());
+        int tokenUpdate = refreshTokenRepository.markUsedIfTokenNotYetUsed(token);
+
+        if (tokenUpdate == 0) {
+            refreshTokenRevocationService.revokeAllForUser(refreshToken.getUser().getId());
             throw new InvalidCredentialsException("Refresh token already used.");
         }
 
+        refreshToken.markUsed();
+
         return refreshToken;
-    }
-
-    @Transactional
-    public void markUsed(RefreshToken token) {
-        token.markUsed();
-        refreshTokenRepository.save(token);
-    }
-
-    @Transactional
-    public void revoke(String token) {
-        refreshTokenRepository.deleteByToken(token);
-    }
-
-    @Transactional
-    public void revokeAllForUser(Long userId) {
-        refreshTokenRepository.deleteByUser_Id(userId);
     }
 }

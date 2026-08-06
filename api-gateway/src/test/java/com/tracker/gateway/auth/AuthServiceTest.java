@@ -8,7 +8,6 @@ import com.tracker.gateway.repository.UserRepository;
 import com.tracker.gateway.user.RefreshToken;
 import com.tracker.gateway.user.Role;
 import com.tracker.gateway.user.User;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -47,6 +46,10 @@ class AuthServiceTest {
     @Captor
     private ArgumentCaptor<User> userCaptor;
 
+    /**
+     * Verifies that a new user is registered successfully
+     * and both access and refresh tokens are returned.
+     */
     @Test
     void shouldRegisterNewUserAndReturnTokens() {
         RegisterRequest request = new RegisterRequest(
@@ -83,6 +86,10 @@ class AuthServiceTest {
         assertThat(savedUser.getRole()).isEqualTo(Role.ADMIN);
     }
 
+    /**
+     * Verifies that the default USER role is assigned
+     * when no role is provided during registration.
+     */
     @Test
     void shouldUseDefaultRoleWhenRegisterRequestRoleIsNull() {
         RegisterRequest request = new RegisterRequest(
@@ -108,6 +115,10 @@ class AuthServiceTest {
         assertThat(userCaptor.getValue().getRole()).isEqualTo(Role.USER);
     }
 
+    /**
+     * Verifies that a user with valid credentials
+     * receives new access and refresh tokens.
+     */
     @Test
     void shouldLoginSuccessfullyWithValidCredentials() {
         LoginRequest request = new LoginRequest("john@example.com", "pass123");
@@ -128,6 +139,9 @@ class AuthServiceTest {
         assertThat(response.refreshToken()).isEqualTo("refresh-token-login");
     }
 
+    /**
+     * Verifies that login fails when the user cannot be found.
+     */
     @Test
     void shouldThrowWhenLoginUserNotFound() {
         LoginRequest request = new LoginRequest("missing@example.com", "pass123");
@@ -137,6 +151,9 @@ class AuthServiceTest {
         assertThrows(InvalidCredentialsException.class, () -> authService.login(request));
     }
 
+    /**
+     * Verifies that login fails when the supplied password does not match the stored password.
+     */
     @Test
     void shouldThrowWhenLoginPasswordDoesNotMatch() {
         LoginRequest request = new LoginRequest("john@example.com", "wrong-pass");
@@ -149,6 +166,10 @@ class AuthServiceTest {
         assertThrows(InvalidCredentialsException.class, () -> authService.login(request));
     }
 
+    /**
+     * Verifies that a valid refresh token is consumed,
+     * a new refresh token is issued, and a new access token is generated.
+     */
     @Test
     void shouldRefreshTokensSuccessfully() {
         User user = new User();
@@ -162,7 +183,6 @@ class AuthServiceTest {
                 .build();
 
         when(refreshTokenService.validateRefreshToken("old-refresh")).thenReturn(oldToken);
-        doNothing().when(refreshTokenService).markUsed(oldToken);
         when(refreshTokenService.generateRefreshToken(user)).thenReturn(RefreshToken.builder().token("new-refresh").user(user).build());
         when(jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId())).thenReturn("new-access");
 
@@ -170,6 +190,8 @@ class AuthServiceTest {
 
         assertThat(response.accessToken()).isEqualTo("new-access");
         assertThat(response.refreshToken()).isEqualTo("new-refresh");
-        verify(refreshTokenService).markUsed(oldToken);
+
+        verify(refreshTokenService).validateRefreshToken("old-refresh");
+        verify(refreshTokenService).generateRefreshToken(user);
     }
 }

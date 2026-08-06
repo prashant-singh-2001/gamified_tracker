@@ -80,7 +80,14 @@ every token fails signature validation — so JJWT's key derivation had to be mo
 BCrypt-hashes passwords (`passwordEncoder.encode`) and, on login, compares with
 `passwordEncoder.matches` — a failed lookup and a wrong password both throw the same
 `InvalidCredentialsException`, so the API never reveals whether an email exists (no user
-enumeration). Both endpoints return the raw JWT string, not a JSON envelope.
+enumeration).
+
+On successful authentication, the gateway issues **both**:
+- a short-lived JWT access token, and
+- a long-lived refresh token persisted in the database.
+
+Refresh tokens are rotated after every successful refresh request and can be revoked server-side,
+allowing replay detection and immediate session invalidation.
 
 ### 2. Validating — `SecurityConfig` as an OAuth2 resource server
 
@@ -229,10 +236,10 @@ pass-through when the authentication isn't a `JwtAuthenticationToken`.
 ## Try it
 
 ```bash
-# Register — returns a raw JWT (not JSON-wrapped)
-TOKEN=$(curl -s -X POST http://localhost:8080/auth/register \
+# Register — returns both an access token and a refresh token
+curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret"}')
+  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret"}'
 
 # Spoofed-header test: authenticated as Ada, but forge a userId header for another user
 curl -X POST http://localhost:8080/api/level -H "Authorization: Bearer $TOKEN" \

@@ -142,12 +142,18 @@ Records an activity session and computes XP (with a chance of a bonus roll). Req
 
 **Event-driven, not synchronous** (since issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)): the log is saved and an `ActivityLogged` event is written to an outbox table in the **same transaction**, then relayed to RabbitMQ and consumed asynchronously by the Gamification Service to apply the XP. This endpoint returns as soon as the log + outbox row are persisted — it does **not** wait for XP to actually be applied. See [`EVENT_DRIVEN_DECOUPLING.md`](docs/features/event-driven-decoupling.md).
 
+**Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
+
+**Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
+
+**Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
+
 **Request body:**
 | Field | Type | Notes |
 |---|---|---|
 | `activityName` | String | must match an existing `Activity.name`, else `404` |
-| `startTime` | ISO-8601 datetime string | |
-| `endTime` | ISO-8601 datetime string | must be after `startTime` |
+| `startTime` | ISO-8601 datetime string | must be `@PastOrPresent` |
+| `endTime` | ISO-8601 datetime string | must be after `startTime` **and** `@PastOrPresent` (#67) — a future-dated session is `400`, not accepted. This closed a real exploit: `endTime` previously had no upper bound at all, so `endTime = now + 10 years` was accepted and awarded millions of minutes of XP from a single call |
 | `notes` | String | optional |
 | `createdAt` | ISO-8601 datetime string | accepted but **ignored** — server sets it to current time |
 
@@ -160,14 +166,16 @@ Records an activity session and computes XP (with a chance of a bonus roll). Req
 | `startTime` | ISO-8601 datetime string | |
 | `endTime` | ISO-8601 datetime string | |
 | `durationMinutes` | Long | computed: `endTime - startTime` |
-| `xpEarned` | double | computed: `durationMinutes × effectiveMultiplier × bonus`, where `effectiveMultiplier` is the activity's per-activity `xpMultiplier` when set (`> 0`), otherwise its `Category` base multiplier (#10). `bonus` is `1.0` normally, or a random value in `[1.1, 1.5)` on a ~20% chance roll |
+| `xpEarned` | double | computed: `durationMinutes × effectiveMultiplier × bonus`, where `effectiveMultiplier` is the activity's per-activity `xpMultiplier` when set (`> 0`), otherwise its `Category` base multiplier (#10). `bonus` is `1.0` normally, or a random value in `[1.1, 1.5)` on a ~20% chance roll. Frozen on the row at write time regardless of `reviewStatus` below — a later approval awards exactly this number |
 | `notes` | String | |
 | `createdAt` | ISO-8601 datetime string | |
 | `bonusApplied` | boolean | `true` if the ~20% bonus roll succeeded for this session |
 | `bonusMultiplier` | double | the multiplier actually used — `1.0` if no bonus, else the rolled `[1.1, 1.5)` value (same value baked into `xpEarned` above) |
 | `leveledUp` | boolean | **Always `false` on this response.** XP is now applied asynchronously by the Gamification Service's RabbitMQ consumer, so whether this session leveled the user up isn't known yet at write time. Poll `GET /api/level/user/{id}` shortly after (or watch the level-up notification feed) for the real value. |
+| `reviewStatus` | String enum | (#67) `CLEARED` (default — XP applies normally), `FLAGGED` (statistical outlier or over `absolute-flag-minutes`; the outbox row was **not** written, so this session's XP will not reach the leaderboard until a maintainer approves it — see [Session Integrity Review](#session-integrity-review-admin) below), `APPROVED`/`REJECTED` (a maintainer's decision on a previously-`FLAGGED` log; never the value on a fresh `POST` response) |
 
 - `404` `ProblemDetail` if `activityName` doesn't match any activity.
+- `400` `ProblemDetail` if `endTime` is in the future, or the session exceeds either duration cap (see Session Integrity above) — distinct from a `FLAGGED` `200`, which is accepted input that's merely statistically unusual.
 
 ---
 
@@ -175,6 +183,20 @@ Records an activity session and computes XP (with a chance of a bonus roll). Req
 List all activity logs for a user. Requires auth. **Open read by design** — `{id}` can be any user, not just the caller (see note above).
 
 **Response:** `200 OK`, JSON array of the same shape as the `POST` response above — **except** `bonusApplied`, `bonusMultiplier` are always `false`/`1.0` here (and on `GET /api/activitylog/{id}`), regardless of what actually happened when the log was created. Those two fields aren't persisted columns; they're only populated on the `POST` response itself, from the in-memory roll. `leveledUp` is `false` everywhere, including on the `POST` response itself now — see the note above.
+
+---
+
+### Session Integrity Review (Admin)
+
+Issue #67. The queue of `FLAGGED` activity logs (see `reviewStatus` above) and the two decisions a maintainer can make on each one. **Admin-only** — unlike every other endpoint in this section, these are gated `hasRole("ADMIN")` at the Gateway (`SecurityConfig`, same pattern as `POST /api/activity`), not open reads. Mounted under `/api/activitylog/review/**` so it rides the existing `activitylog` route/rate-limit bucket rather than needing a new one.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/activitylog/review/flagged` | **ADMIN** | the review queue, newest first. Each entry pairs the full `ActivityLogResponse` (as in `POST /api/activitylog` above) with the detector's recomputed verdict: `modifiedZScore`, `median`, `sampleSize`, `basis` (`INSUFFICIENT_SAMPLES` \| `MODIFIED_Z_SCORE` \| `MEAN_AD_FALLBACK` \| `RELATIVE_FALLBACK` \| `ABSOLUTE_THRESHOLD`) |
+| `POST` | `/api/activitylog/review/{id}/approve` | **ADMIN** | `FLAGGED` → `APPROVED`, and writes the outbox row that was withheld at creation time — the existing 2-second `OutboxRelay` then applies the originally-computed `xpEarned` exactly as if the log had never been flagged. Idempotent: the outbox row's `idempotency_key` is the log id, so a second approve attempt on an already-`APPROVED` log can't double-award XP |
+| `POST` | `/api/activitylog/review/{id}/reject` | **ADMIN** | `FLAGGED` → `REJECTED`. No outbox row is ever written — XP for this log is never applied. No compensation logic needed, since nothing was written at creation time |
+
+Both `POST` endpoints return the updated `ActivityLogResponse` (`200 OK`), or `409` `ProblemDetail` if the log isn't currently `FLAGGED` (e.g. re-approving an already-`APPROVED`/`REJECTED` log, or acting on a log that was always `CLEARED`), or `404` if the id doesn't exist. See [Session Integrity](docs/features/session-integrity.md) for the detection math and the full flagged → approved/rejected lifecycle.
 
 ---
 
@@ -307,6 +329,11 @@ Calculates daily XP earned and total active minutes for the specified window (de
 
 #### `GET /activitylog/analytics/user/{userId}/weekly-report`
 Generates a comprehensive weekly report comparing current week vs previous week XP, percentage change, total active minutes, top category, and a 7-day daily breakdown.
+
+#### `GET /activitylog/review/flagged`
+#### `POST /activitylog/review/{id}/approve`
+#### `POST /activitylog/review/{id}/reject`
+Direct-hit equivalents of the Gateway's [Session Integrity Review](#session-integrity-review-admin) endpoints (issue #67). Same request/response shapes. **The `hasRole("ADMIN")` gate is Gateway-only** — this service has no security layer of its own, so calling these directly against `:8081` bypasses the admin check entirely, same caveat as the trusted-`userId`-header note on `POST /activitylog/` above.
 
 ---
 

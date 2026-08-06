@@ -11,6 +11,7 @@ import com.tracker.gateway.user.User;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AuthService {
@@ -68,13 +69,11 @@ public class AuthService {
         return new AuthResponse(accessToken, refreshToken.getToken());
     }
 
+    @Transactional
     public AuthResponse refresh(String refreshToken) {
         // Validate the refresh token
         RefreshToken oldToken = refreshTokenService.validateRefreshToken(refreshToken);
         User user = oldToken.getUser();
-
-        // Mark old token as used
-        refreshTokenService.markUsed(oldToken);
 
         // Generate new Refresh Token
         RefreshToken newRefreshToken = refreshTokenService.generateRefreshToken(user);
