@@ -1,7 +1,8 @@
 # Authentication & Trusted-Identity Propagation
 
 **Service:** `api-gateway` · **Key classes:** `JwtUtil`, `AuthService`, `SecurityConfig`,
-`UserIdHeaderFilter`, `RefreshTokenService`, `RefreshToken`, `AdminBootstrap`
+`UserIdHeaderFilter`, `RefreshTokenService`, `RefreshTokenRevocationService`, `RefreshToken`,
+`AdminBootstrap`
 
 ## What it is / why it's notable
 
@@ -231,13 +232,15 @@ public AuthResponse refresh(String refreshToken) {
     RefreshToken oldToken = refreshTokenService.validateRefreshToken(refreshToken);
     User user = oldToken.getUser();
 
-    refreshTokenService.markUsed(oldToken);
     RefreshToken newRefreshToken = refreshTokenService.generateRefreshToken(user);
     String newAccessToken = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId());
 
     return new AuthResponse(newAccessToken, newRefreshToken.getToken());
 }
 ```
+Notice there's no separate "mark used" call here — `validateRefreshToken` already did that
+atomically, as part of validating the token, not as a follow-up step. That's deliberate; see the CAS
+query below for why.
 
 ```mermaid
 sequenceDiagram
@@ -251,62 +254,94 @@ sequenceDiagram
     RTS->>DB: findByToken(token)
     alt not found
         RTS-->>C: 401 "Refresh token not found"
+    else already revoked
+        RTS-->>C: 401 "Refresh token has been revoked."
     else expired
-        RTS->>DB: delete this token
+        RTS->>DB: revoke() this token (flag + timestamp, row kept)
         RTS-->>C: 401 "Refresh token expired, please log in again"
-    else already used
-        RTS->>DB: delete EVERY token for this user
-        RTS-->>C: 401 "Refresh token already used."
-    else valid, unused
-        AC->>RTS: markUsed(oldToken)
-        RTS->>DB: used = true
-        AC->>RTS: generateRefreshToken(user)
-        RTS->>DB: insert new token row
-        AC-->>C: 200 new AuthResponse{accessToken, refreshToken}
+    else unexpired, unrevoked
+        RTS->>DB: UPDATE ... SET isUsed=true WHERE token=? AND isUsed=false
+        alt 0 rows updated (a racing request already won)
+            RTS->>DB: revoke EVERY token for this user
+            RTS-->>C: 401 "Refresh token already used."
+        else 1 row updated
+            AC->>RTS: generateRefreshToken(user)
+            RTS->>DB: insert new token row
+            AC-->>C: 200 new AuthResponse{accessToken, refreshToken}
+        end
     end
 ```
 
 Unlike the stateless access token, a refresh token is **tracked server-side** — `RefreshToken` is a
-real row (`refresh_token` table: `token` UUID string, `user_id` FK, `expiresAt`, a `used` flag), not
-just a signed claim. That's what makes revocation possible at all; a stateless JWT can't be
-individually invalidated before it expires, but a DB row can be deleted.
+real row (`refresh_token` table: `token` UUID string, `user_id` FK, `expiresAt`, `usedAt`/`revokedAt`
+timestamps, `isUsed`/`isRevoked` flags), not just a signed claim. That's what makes revocation
+possible at all; a stateless JWT can't be individually invalidated before it expires, but a DB row
+can be marked revoked. Revoked and used-up tokens are **kept, not deleted** — `revoke()` just flips a
+flag and stamps a timestamp, leaving a queryable history of every token's lifecycle rather than
+erasing it.
 
-**Every refresh token is single-use, and every successful refresh rotates it** — `markUsed` flips the
-row's `used` flag and a brand-new token is issued alongside the new access token; the presented token
-is never handed back. This is what makes the next part meaningful:
+**The single-use guarantee is an atomic compare-and-set, not a read-then-write:**
+```java
+@Modifying
+@Query("""
+    UPDATE RefreshToken rt
+    SET rt.isUsed = true
+    WHERE rt.token = :token
+    AND rt.isUsed = false
+""")
+int markUsedIfTokenNotYetUsed(@Param("token") String token);
+```
+One `UPDATE` statement both checks and sets `isUsed` in a single round trip to the database — the
+row-level lock the `UPDATE` takes is what actually prevents two concurrent refreshes of the same
+token from both winning, not application-level logic. It returns `1` if *this* call is the one that
+flipped the flag, or `0` if some other request already had. This closes a real race: an earlier
+version of this check ran `validateRefreshToken` (read) and `markUsed` (write) as two separate calls
+with nothing serializing them, so two concurrent `/auth/refresh` requests presenting the same
+still-valid token could both pass validation before either wrote `used = true`. The atomic
+`UPDATE ... WHERE isUsed = false` removes that window entirely — whichever request's `UPDATE` reaches
+the database first wins the row lock and gets `1`; the other is guaranteed to see `0`, deterministically,
+regardless of how tightly the two requests race.
 
 ```java
-if (refreshToken.isUsed()) {
-    revokeAllForUser(refreshToken.getUser().getId());
+int tokenUpdate = refreshTokenRepository.markUsedIfTokenNotYetUsed(token);
+if (tokenUpdate == 0) {
+    refreshTokenRevocationService.revokeAllForUser(refreshToken.getUser().getId());
     throw new InvalidCredentialsException("Refresh token already used.");
 }
 ```
-Presenting an *expired* token is treated as benign — the one token is deleted and the client is told
-to log in again. Presenting an **already-used** token is treated differently: since rotation means
-a legitimate client would never do this (it always gets a fresh token back and discards the old
-one), a used-token replay is a signal that the token was copied or stolen, and *every* refresh token
-belonging to that user is revoked — not just the one presented. This is the standard refresh-token
-rotation + reuse-detection pattern: it doesn't stop a single theft, but it forces both the attacker's
-and the legitimate user's sessions to re-authenticate the moment the theft is exploited, bounding the
-damage instead of leaving a stolen long-lived token valid for its full 7-day life.
+Presenting an *expired* token is treated as benign — that one token is revoked and the client is told
+to log in again. Presenting an **already-used** token (the CAS above returns `0`) is treated
+differently: since rotation means a legitimate client would never do this (it always gets a fresh
+token back and discards the old one), a used-token replay is a signal that the token was copied or
+stolen, and *every* refresh token belonging to that user is revoked — not just the one presented.
+This is the standard refresh-token rotation + reuse-detection pattern: it doesn't stop a single
+theft, but it forces both the attacker's and the legitimate user's sessions to re-authenticate the
+moment the theft is exploited, bounding the damage instead of leaving a stolen long-lived token valid
+for its full 7-day life.
+
+**Revocation runs in its own transaction, deliberately** — `RefreshTokenRevocationService.revoke`/
+`revokeAllForUser` are both `@Transactional(propagation = Propagation.REQUIRES_NEW)`, so the
+theft-response write commits on its own rather than being nested inside (and thus at risk from) the
+`validateRefreshToken` transaction it's called from. A security action like "lock out every session
+for this user" shouldn't be rolled back by an unrelated failure elsewhere in the same request.
+
+**A mass-revoked token reports a different reason than an individually-replayed one.**
+`revokeAllForUser` only flips `isRevoked` on the *other* tokens it sweeps up — it never touches their
+`isUsed` flag. So a token that was never itself replayed, but got caught in a mass revocation
+triggered by a sibling token's reuse, reports `"Refresh token has been revoked."` on its next
+presentation (checked *before* the used/expired checks) — a distinct failure from
+`"Refresh token already used."`, letting a client or an admin reading logs tell "this specific token
+was replayed" apart from "this token was swept up because a sibling token was replayed."
 
 `InvalidCredentialsException` gained a message-carrying constructor to support this
 (`GatewayExceptionHandler` maps it to `401` `ProblemDetail` either way) — note this is a deliberate
 departure from the login path's no-enumeration principle above: refresh failures *do* say exactly
-why ("not found" vs "expired" vs "already used"), because a refresh token isn't a guessable secret
-like a password, so distinguishing failure reasons here doesn't leak anything an attacker couldn't
-already infer from possessing the token.
-
-**A narrow TOCTOU window worth knowing about:** `validateRefreshToken` (the check) and `markUsed`
-(the write) are two separate `@Transactional` calls with no row lock or optimistic-version field
-between them. Two concurrent `/auth/refresh` calls presenting the same still-valid token can both
-pass validation before either marks it used, both minting a new token pair from the same old one.
-Low blast radius in practice (both requests came from someone holding the same valid token), but it
-means reuse detection is not airtight against a client that retries/duplicates the exact same
-request in flight.
+why ("not found" vs "revoked" vs "expired" vs "already used"), because a refresh token isn't a
+guessable secret like a password, so distinguishing failure reasons here doesn't leak anything an
+attacker couldn't already infer from possessing the token.
 
 **No logout endpoint calls `revoke`/`revokeAllForUser` directly today** — both methods exist and are
-exercised (`RefreshTokenServiceTest`), but the only caller in production code is
+exercised (`RefreshTokenRevocationServiceTest`), but the only caller in production code is
 `validateRefreshToken`'s own error paths above. A `POST /auth/logout` that revokes the caller's
 refresh token(s) on demand is the natural next piece, not yet built.
 
@@ -356,23 +391,27 @@ token past authorization (verified by asserting the response isn't `403`, since 
 routing to a live service instance — is out of scope for a gateway-only test). `UserIdHeaderFilterTest`
 covers the filter's four behaviours: skipped with no authentication, `401` on a missing `userId`
 claim, header injected on the happy path, and pass-through when the authentication isn't a
-`JwtAuthenticationToken`. `RefreshTokenServiceTest` covers `generateRefreshToken`, the three
-`validateRefreshToken` outcomes (not-found, expired + single revoke, already-used + revoke-all),
-`markUsed`, and both revoke methods directly. `AuthServiceTest.shouldRefreshTokensSuccessfully`
-covers the full rotation through `AuthService`: old token marked used, new access + refresh tokens
-both returned; `shouldAlwaysAssignUserRoleRegardlessOfCaller` pins that `register` can no longer
-produce anything but a `USER` account. `AdminBootstrapTest` covers all four `run()` branches: create,
-promote, no-op when already ADMIN, and the blank-email/password guard.
+`JwtAuthenticationToken`. `RefreshTokenServiceTest` covers `generateRefreshToken` and all four
+`validateRefreshToken` outcomes: not-found, already-revoked, expired (+ single revoke), and the
+already-used case — simulated by stubbing `markUsedIfTokenNotYetUsed` to return `0`, standing in for
+a racing request that already won the atomic update. `RefreshTokenRevocationServiceTest` covers
+`revoke`/`revokeAllForUser` directly: an active token gets revoked and saved, an already-revoked one
+is left alone (no redundant save), and a user's whole token list is swept in one `saveAll`, including
+the empty-list case. `AuthServiceTest.shouldRefreshTokensSuccessfully` covers the rotation through
+`AuthService`'s own orchestration: the presented token is validated, a fresh access/refresh pair is
+generated, and both come back in the response — `AuthService` itself no longer marks anything used,
+since `validateRefreshToken` already did that atomically before returning.
+`shouldAlwaysAssignUserRoleRegardlessOfCaller` pins that `register` can no longer produce anything but
+a `USER` account. `AdminBootstrapTest` covers all four `run()` branches: create, promote, no-op when
+already ADMIN, and the blank-email/password guard.
 
 ## Try it
 
 ```bash
 # Register — returns both an access token and a refresh token
-curl -X POST http://localhost:8080/auth/register \
-# Register — now returns {"accessToken": "...", "refreshToken": "..."}, not a raw JWT
 RESPONSE=$(curl -s -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret"}'
+  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret"}')
 TOKEN=$(echo "$RESPONSE" | jq -r .accessToken)
 REFRESH=$(echo "$RESPONSE" | jq -r .refreshToken)
 
