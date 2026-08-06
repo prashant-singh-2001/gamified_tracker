@@ -152,7 +152,7 @@ block is commented out in `application.yaml` to avoid registering duplicate, un-
 | Route id | Predicate | Target | Filters |
 |---|---|---|---|
 | `activity` | `/api/activity/**`, `/api/activitylog/**` | `lb://activity-service` | Two mutually-exclusive `rewritePath(...)` regexes (not `stripPrefix`) — activity-service's list/create endpoints are mapped at a bare `/`, and Spring 6's `PathPatternParser` no longer treats `/activity` and `/activity/` as equivalent, so the base path needs its trailing slash rewritten in explicitly + `rateLimit` |
-| `gamification` | `/api/level/**`, `/api/threshold/**`, `/api/notifications/**` | `lb://gamification-service` | `stripPrefix(1)` + `rateLimit` |
+| `gamification` | `/api/level/**`, `/api/threshold/**`, `/api/leaderboard/**`, `/api/notifications/**`, `/api/ranks/**` | `lb://gamification-service` | `stripPrefix(1)` + `rateLimit` |
 
 ## Rate limiting
 
