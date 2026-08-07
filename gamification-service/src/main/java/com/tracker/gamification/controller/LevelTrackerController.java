@@ -2,6 +2,7 @@ package com.tracker.gamification.controller;
 
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
+import com.tracker.gamification.dto.ManualXpAwardRequest;
 import com.tracker.gamification.service.impl.LevelTrackerServiceImpl;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
@@ -36,10 +37,19 @@ public class LevelTrackerController {
     // public ResponseEntity<LevelTrackerDto> createLevelTracker(@RequestBody LevelTrackerRequestDTO levelTrackerRequestDTO) {
     //     return ResponseEntity.ok(levelTrackerService.save(levelTrackerRequestDTO));
     // }
+    // #74: this was a public, unbounded XP mint — any authenticated user could award
+    // themselves arbitrary XP for arbitrary activityId, bypassing activity-service, the
+    // outbox, and the idempotency guard entirely. Gated hasRole("ADMIN") at the gateway
+    // (SecurityConfig) and replaced with a capped, audited manual-award door.
+    // @PostMapping
+    // public ResponseEntity<LevelTrackerDto> createLevelTracker(@RequestHeader("userId") @Positive(message = "id cannot be negative or zero") Long userId,
+    //                                                            @Valid @RequestBody LevelTrackerRequestDTO levelTrackerRequestDTO) {
+    //     return ResponseEntity.ok(levelTrackerService.save(userId, levelTrackerRequestDTO));
+    // }
     @PostMapping
-    public ResponseEntity<LevelTrackerDto> createLevelTracker(@RequestHeader("userId") @Positive(message = "id cannot be negative or zero") Long userId,
-                                                               @Valid @RequestBody LevelTrackerRequestDTO levelTrackerRequestDTO) {
-        return ResponseEntity.ok(levelTrackerService.save(userId, levelTrackerRequestDTO));
+    public ResponseEntity<LevelTrackerDto> awardXpManually(@RequestHeader("userId") @Positive(message = "id cannot be negative or zero") Long actorUserId,
+                                                             @Valid @RequestBody ManualXpAwardRequest request) {
+        return ResponseEntity.ok(levelTrackerService.awardManually(actorUserId, request));
     }
 
     @GetMapping("/user/{userId}")

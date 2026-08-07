@@ -44,7 +44,10 @@ public class AuthService {
         // Encrypt password before saving
         user.setPassword(passwordEncoder.encode(request.password()));
 
-        user.setRole(request.role() != null ? request.role() : Role.USER);
+        // #74: role is never client-supplied. Public self-registration always yields USER;
+        // admins are provisioned out of band (app.admin.bootstrap.*).
+        // OLD: user.setRole(request.role() != null ? request.role() : Role.USER);
+        user.setRole(Role.USER);
         userRepository.save(user);
 
         String accessToken = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId());

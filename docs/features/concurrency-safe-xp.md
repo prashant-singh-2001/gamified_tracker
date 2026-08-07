@@ -6,13 +6,23 @@
 ## What it is / why it's notable
 
 A classic read-modify-write race, closed with three cooperating mechanisms instead of one. If two
-`POST /level` requests for the same `(userId, activityId)` land at nearly the same instant — plausible
-here, since the [event-driven consumer](event-driven-decoupling.md) and a direct HTTP call can both
-be applying XP concurrently — a naive "read totalXp, add xp, write totalXp" loses one of the two
-updates. This code prevents that with an atomic upsert, a pessimistic row lock, and a database unique
-constraint as the final backstop — three independent layers, each catching what the one before it
-might miss. It also snapshots every previous state to an append-only archive before mutating, so the
-fix produces an audit trail as a side effect.
+writes for the same `(userId, activityId)` land at nearly the same instant — plausible here, since
+the [event-driven consumer](event-driven-decoupling.md) and an admin's manual `POST /level` award
+(see below) can both be applying XP concurrently — a naive "read totalXp, add xp, write totalXp"
+loses one of the two updates. This code prevents that with an atomic upsert, a pessimistic row lock,
+and a database unique constraint as the final backstop — three independent layers, each catching what
+the one before it might miss. It also snapshots every previous state to an append-only archive before
+mutating, so the fix produces an audit trail as a side effect.
+
+**`POST /level` is admin-only as of issue #74.** It used to be a public, unbounded XP mint — any
+authenticated user could award themselves arbitrary XP for arbitrary activities, bypassing
+activity-service, the outbox, and the idempotency guard entirely. It's now gated
+`hasRole("ADMIN")` at the gateway, capped at 10,000 XP per call
+(`ManualXpAwardRequest.xp`'s `@DecimalMax`), and every call writes a `manual_xp_award` audit row
+(actor, target, activity, xp, timestamp) via `LevelTrackerServiceImpl.awardManually` before
+delegating to the `save()` shown below — see the "Two callers, one method" section of
+[Event-Driven Decoupling](event-driven-decoupling.md) for how the two entry points now diverge
+before that convergence point.
 
 ## How it works
 
@@ -126,10 +136,12 @@ Postgres instance (`docker-compose.yml`).
 
 ## Try it
 
-Fire a burst of concurrent `POST /api/level` (or `/api/activitylog`, which drives it via the
-[event-driven path](event-driven-decoupling.md)) for the same activity and confirm the resulting
-`totalXp` equals the exact sum of every request's `xp` — not less. A 20-request concurrent burst is
-the standard way this was verified during development.
+Fire a burst of concurrent `POST /api/level` **with an admin token** (or `/api/activitylog`, which
+drives it via the [event-driven path](event-driven-decoupling.md) and needs no special role) for the
+same activity and confirm the resulting `totalXp` equals the exact sum of every request's `xp` — not
+less. A 20-request concurrent burst is the standard way this was verified during development; keep
+each request's `xp` under the 10,000 per-call cap or later requests in the burst will `400` instead
+of exercising the race.
 
 ## Related
 [Leveling Engine](leveling-engine.md) (what happens inside `applyLevel`) ·
