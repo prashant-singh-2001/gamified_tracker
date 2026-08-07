@@ -68,6 +68,15 @@ jwt:
   expiration: ${JWT_EXPIRATION:900000}   # 15 mins in ms
   refresh-expiration: ${REFRESH_EXPIRATION:604800000}  # 7 days in ms
 
+# #74: /auth/register can no longer produce an ADMIN account (role is not client-supplied).
+# This is the only way to provision one. Off by default — enabling it requires email+password.
+app:
+  admin:
+    bootstrap:
+      enabled: ${ADMIN_BOOTSTRAP_ENABLED:false}
+      email: ${ADMIN_EMAIL:}
+      password: ${ADMIN_PASSWORD:}
+
 # Logging (very useful during dev)
 logging:
   level:

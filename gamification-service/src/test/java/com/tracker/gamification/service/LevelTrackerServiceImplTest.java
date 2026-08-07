@@ -5,13 +5,16 @@ import com.tracker.gamification.dao.ActivityLevelThresholdId;
 import com.tracker.gamification.dao.LevelTracker;
 import com.tracker.gamification.dao.LevelTrackerArchive;
 import com.tracker.gamification.dao.LevelUpEvent;
+import com.tracker.gamification.dao.ManualXpAward;
 import com.tracker.gamification.domain.LevelCurve;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
+import com.tracker.gamification.dto.ManualXpAwardRequest;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.LevelUpEventRepository;
+import com.tracker.gamification.repository.ManualXpAwardRepository;
 import com.tracker.gamification.service.impl.LevelTrackerServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,6 +47,9 @@ public class LevelTrackerServiceImplTest {
 
     @Mock
     private LevelUpEventRepository levelUpEventRepository;
+
+    @Mock
+    private ManualXpAwardRepository manualXpAwardRepository;
 
     // Real curve (not @Mock) — @InjectMocks needs an actual computation here, not a stub returning
     // 0/false for everything. Values match the plan's worked examples (base 100, exponent 1.5).
@@ -805,6 +811,70 @@ public class LevelTrackerServiceImplTest {
         assertTrue(result.leveledUp());
         verify(levelUpEventRepository).save(argThat((LevelUpEvent e) ->
                 e.getOldLevel() == 3 && e.getNewLevel() == 4));
+    }
+
+    // #74: POST /level's replacement — awardManually always writes an audit row before
+    // delegating to the same save() primitive the event-driven path uses.
+
+    @Test
+    @DisplayName("awardManually records an audit row naming the acting admin and an explicit target, then delegates to save")
+    void awardManually_recordsAuditRow_withExplicitTarget() {
+        // Arrange
+        ManualXpAwardRequest request = new ManualXpAwardRequest(2L, 1L, 500.0);
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L).userId(2L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+        LevelTracker savedTracker = LevelTracker.builder()
+                .id(1L).userId(2L).activityId(1L).level(1).totalXp(500.0).currentLevelXp(500.0).build();
+
+        when(levelTrackerRepository.insertIfAbsent(2L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(2L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(500.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(activityLevelThresholdRepository.countForActivity(1L)).thenReturn(3L);
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(savedTracker);
+
+        // Act — actor (the calling admin) is 10L, target is the explicit 2L in the request
+        LevelTrackerDto result = levelTrackerService.awardManually(10L, request);
+
+        // Assert
+        assertEquals(2L, result.userId());
+        assertEquals(500.0, result.totalXp());
+        verify(manualXpAwardRepository).save(argThat((ManualXpAward award) ->
+                award.getActorUserId().equals(10L)
+                        && award.getTargetUserId().equals(2L)
+                        && award.getActivityId().equals(1L)
+                        && award.getXp() == 500.0));
+        verify(levelTrackerRepository).insertIfAbsent(2L, 1L);
+    }
+
+    @Test
+    @DisplayName("awardManually defaults the target to the acting admin when targetUserId is omitted")
+    void awardManually_defaultsTargetToActor_whenTargetUserIdNull() {
+        // Arrange
+        ManualXpAwardRequest request = new ManualXpAwardRequest(null, 1L, 100.0);
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L).userId(10L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+        LevelTracker savedTracker = LevelTracker.builder()
+                .id(1L).userId(10L).activityId(1L).level(1).totalXp(100.0).currentLevelXp(100.0).build();
+
+        when(levelTrackerRepository.insertIfAbsent(10L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(10L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(100.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(activityLevelThresholdRepository.countForActivity(1L)).thenReturn(3L);
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(savedTracker);
+
+        // Act — no targetUserId in the request, so the acting admin (10L) is both actor and target
+        LevelTrackerDto result = levelTrackerService.awardManually(10L, request);
+
+        // Assert
+        assertEquals(10L, result.userId());
+        verify(manualXpAwardRepository).save(argThat((ManualXpAward award) ->
+                award.getActorUserId().equals(10L) && award.getTargetUserId().equals(10L)));
     }
 }
 

@@ -42,10 +42,10 @@ This is a **real Spring Cloud Gateway** (`spring-cloud-starter-gateway-server-we
 - **`JwtUtil.generateToken(email, role, userId)`** — signs an HS256 token carrying `role` and the numeric `userId` (the user's `User.id`) as claims, plus a configurable expiry (`jwt.expiration`). `validateToken` parses and returns the claims. `AuthService` calls this with `user.getId()` on both register and login.
 - **`SecurityConfig`** — configures Spring Security as an OAuth2 Resource Server. `JwtDecoder` validates the Bearer token, and `jwtAuthenticationConverter()` maps the JWT `role` claim to Spring Security authorities (`ROLE_USER` / `ROLE_ADMIN`).
 - **`UserIdHeaderFilter`** — runs after authentication, requires the `userId` claim to be present (rejects with `401` if it's missing), and wraps the request to inject a trusted `userId` header. It then **wraps the request** to force a `userId` HTTP header to the JWT's trusted value — overriding `getHeader`, `getHeaders`, *and* `getHeaderNames` (not just `getHeader`, which the Gateway's own request-forwarding doesn't consult) so a client-forged `userId` header is fully replaced, not merely shadowed, before the request is routed downstream. `UserIdHeaderFilter.shouldNotFilter()` exempts `/auth/**`, swagger, `/v3/api-docs`, `/swagger-resources`, `/webjars`, and `/actuator/**`.
-- **`SecurityConfig`** — `@EnableWebSecurity`. `/auth/**`, swagger/OpenAPI paths, and `/actuator/**` are `permitAll`; `POST /api/activity` (and its trailing-slash form) is gated with `.hasRole("ADMIN")`; everything else requires authentication. There is no `@PreAuthorize`/`@EnableMethodSecurity` in this service — admin gating happens at the URL/route level because routing itself is now declarative, so there's no controller method left to annotate.
-- **Why the header matters**: `activity-service` and `gamification-service` have no security of their own — they trust whatever arrives in the `userId` header on `POST /activitylog/` and `POST /level`. This filter is what makes that trust well-founded when the request comes through the Gateway (or via activity-service's internal Feign call, which forwards the same header explicitly). See [API.md § Authentication](../API.md#authentication) for the full write-vs-read trust model, including which reads are intentionally open across users.
+- **`SecurityConfig`** — `@EnableWebSecurity`. `/auth/**`, swagger/OpenAPI paths, and `/actuator/**` are `permitAll`; three routes are gated with `.hasRole("ADMIN")` — `POST /api/activity` (and its trailing-slash form), `/api/activitylog/review/**`, and `POST /api/level` (and its trailing-slash form, added in issue #74); everything else requires authentication. There is no `@PreAuthorize`/`@EnableMethodSecurity` in this service — admin gating happens at the URL/route level because routing itself is now declarative, so there's no controller method left to annotate.
+- **Why the header matters**: `activity-service` and `gamification-service` have no security of their own — they trust whatever arrives in the `userId` header on `POST /activitylog/` and `POST /level`. This filter is what makes that trust well-founded when the request comes through the Gateway. See [API.md § Authentication](../API.md#authentication) for the full write-vs-read trust model, including which reads are intentionally open across users.
 
-> ⚠️ `POST /auth/register` honors the requested `role`, so anyone can self-register as `ADMIN`. Acceptable for this demo; not production-safe.
+**Admin provisioning (issue #74).** `POST /auth/register` used to honor a client-supplied `role`, so anyone could self-register as `ADMIN` unauthenticated — that made every `hasRole("ADMIN")` matcher above decorative. `register` now always assigns `Role.USER`; the only way to get an `ADMIN` account is `AdminBootstrap`, an `ApplicationRunner` gated by `app.admin.bootstrap.enabled` (off by default, so CI's `cp .env.example .env` needs no secrets). Enable it with `ADMIN_BOOTSTRAP_ENABLED=true` plus `ADMIN_EMAIL`/`ADMIN_PASSWORD` in `.env` — it creates the account as `ADMIN` if absent, or promotes it if it already exists as `USER`.
 
 ## API reference
 
@@ -62,9 +62,10 @@ Request:
 | `firstName`, `lastName` | String | |
 | `email` | String | unique |
 | `password` | String | BCrypt-hashed before storage |
-| `role` | enum | `USER` \| `ADMIN` — optional, defaults to `USER`; honored as-is (see warning above) |
 
-Response `200 OK`: a raw JWT string (not JSON-wrapped), carrying `role` and `userId` claims.
+No `role` field — see the admin-provisioning note above.
+
+Response `200 OK`: a raw JWT string (not JSON-wrapped), carrying `role` (always `USER` here) and `userId` claims.
 
 #### `POST /auth/login`
 Authenticate and return a JWT. Request: `{ "email", "password" }`.
@@ -97,11 +98,11 @@ Request/response bodies mirror the Activity Service (`name`, `category`, `xpMult
 |--------|------|------|-------------|
 | `GET` | `/api/level` | authenticated | list every row — open read |
 | `GET` | `/api/level/{id}` | authenticated | one row by internal id (`404` if missing) — open read |
-| `POST` | `/api/level` | authenticated | create-or-update XP for **the caller's own** activity. Normally called internally by the Activity Service, not directly by clients |
+| `POST` | `/api/level` | **ADMIN** | manually award XP to an activity (issue #74) — not the normal way players earn XP, see below |
 | `GET` | `/api/level/user/{userId}` | authenticated | all rows for a user — open read, `{userId}` can be anyone |
 | `GET` | `/api/level/activity/{activityId}` | authenticated | all rows for an activity |
 
-`POST` body has no `userId` field — see [gamification-service README](../gamification-service/README.md).
+**`POST` is admin-only, capped, and audited (issue #74).** It used to be a public, unbounded write reachable by any authenticated user. Now: `hasRole("ADMIN")` at the Gateway, `xp` capped at `10000.0` (`400` with a message over that), and every call writes a `manual_xp_award` row (acting admin, target, activity, xp, timestamp) before applying the XP. Body is `{ "targetUserId"?: Long, "activityId": Long, "xp": double }` — `targetUserId` is optional and defaults to the acting admin; there is no `userId` field (the acting admin's id comes from the trusted header, same as everywhere else). Players earn XP through `POST /api/activitylog` instead — see [gamification-service README](../gamification-service/README.md) and [Concurrency-Safe XP Accumulation](../docs/features/concurrency-safe-xp.md).
 
 ### Activity Level Threshold (routed) — `/api/threshold`
 
@@ -151,7 +152,7 @@ block is commented out in `application.yaml` to avoid registering duplicate, un-
 | Route id | Predicate | Target | Filters |
 |---|---|---|---|
 | `activity` | `/api/activity/**`, `/api/activitylog/**` | `lb://activity-service` | Two mutually-exclusive `rewritePath(...)` regexes (not `stripPrefix`) — activity-service's list/create endpoints are mapped at a bare `/`, and Spring 6's `PathPatternParser` no longer treats `/activity` and `/activity/` as equivalent, so the base path needs its trailing slash rewritten in explicitly + `rateLimit` |
-| `gamification` | `/api/level/**`, `/api/threshold/**`, `/api/notifications/**` | `lb://gamification-service` | `stripPrefix(1)` + `rateLimit` |
+| `gamification` | `/api/level/**`, `/api/threshold/**`, `/api/leaderboard/**`, `/api/notifications/**`, `/api/ranks/**` | `lb://gamification-service` | `stripPrefix(1)` + `rateLimit` |
 
 ## Rate limiting
 
@@ -220,8 +221,9 @@ Includes `@WebMvcTest` controller tests and auth tests.
 ## Troubleshooting
 
 - **`401` on every `/api/**` call** — missing/expired/invalid `Bearer` token, or a token minted before the `userId` claim existed; re-login.
-- **`403` on `POST /api/activity`** — the token's role is `USER`, not `ADMIN`. Register/login as an admin.
-- **`400` on a downstream `POST` (`/api/activitylog`, `/api/level`) when hit directly, bypassing the Gateway** — `userId` is a required header on those two endpoints; the Gateway supplies it automatically, direct calls to `:8081`/`:8082` must supply it manually (see [API.md](../API.md)).
+- **`403` on `POST /api/activity` or `POST /api/level`** — the token's role is `USER`, not `ADMIN`. `POST /auth/register` can no longer produce an `ADMIN` account (issue #74) — enable `AdminBootstrap` (`ADMIN_BOOTSTRAP_ENABLED=true` + `ADMIN_EMAIL`/`ADMIN_PASSWORD` in `.env`) and log in as that account instead.
+- **`400` on `POST /api/level` with a specific message** — `xp` over the 10,000 per-call cap, or negative; gamification-service's `MethodArgumentNotValidException` handler (added alongside #74) returns the exact field message rather than an opaque `400`.
+- **`400` on a downstream `POST` (`/api/activitylog`, `/api/level`) when hit directly, bypassing the Gateway** — `userId` is a required header on those two endpoints; the Gateway supplies it automatically, direct calls to `:8081`/`:8082` must supply it manually (see [API.md](../API.md)). For `/api/level` specifically, bypassing the Gateway this way also skips the `ADMIN` role check entirely, since gamification-service has no security layer of its own.
 - **Health check:** `curl http://localhost:8080/actuator/health` — no token required (`permitAll`'d in both `SecurityConfig` and `UserIdHeaderFilter`).
 
 ## Related docs

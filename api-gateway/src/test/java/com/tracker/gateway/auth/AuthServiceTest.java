@@ -56,8 +56,7 @@ class AuthServiceTest {
                 "John",
                 "Doe",
                 "john@example.com",
-                "pass123",
-                Role.ADMIN
+                "pass123"
         );
 
         when(passwordEncoder.encode(request.password())).thenReturn("encoded-pass");
@@ -66,7 +65,7 @@ class AuthServiceTest {
             user.setId(1L);
             return user;
         });
-        when(jwtUtil.generateToken(request.email(), request.role(), 1L)).thenReturn("access-token");
+        when(jwtUtil.generateToken(request.email(), Role.USER, 1L)).thenReturn("access-token");
 
         RefreshToken refreshToken = RefreshToken.builder()
                 .token("refresh-token")
@@ -83,7 +82,7 @@ class AuthServiceTest {
         User savedUser = userCaptor.getValue();
         assertThat(savedUser.getEmail()).isEqualTo("john@example.com");
         assertThat(savedUser.getPassword()).isEqualTo("encoded-pass");
-        assertThat(savedUser.getRole()).isEqualTo(Role.ADMIN);
+        assertThat(savedUser.getRole()).isEqualTo(Role.USER);
     }
 
     /**
@@ -91,13 +90,14 @@ class AuthServiceTest {
      * when no role is provided during registration.
      */
     @Test
-    void shouldUseDefaultRoleWhenRegisterRequestRoleIsNull() {
+    void shouldAlwaysAssignUserRoleRegardlessOfCaller() {
+        // #74: RegisterRequest no longer carries a role field at all — this pins the fix
+        // that public self-registration can never produce anything but a USER account.
         RegisterRequest request = new RegisterRequest(
                 "Jane",
                 "Doe",
                 "jane@example.com",
-                "secret",
-                null
+                "secret"
         );
 
         when(passwordEncoder.encode(request.password())).thenReturn("encoded-secret");
