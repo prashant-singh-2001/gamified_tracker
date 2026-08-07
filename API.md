@@ -58,7 +58,7 @@ Tokens are signed HS256 JWTs and carry the user's `role` as a claim. The signing
 ### Auth
 
 #### `POST /auth/register`
-Creates a user and returns a JWT. Public (no token required).
+Creates a user and returns an access/refresh token pair. Public (no token required).
 
 **Request body:**
 | Field | Type | Notes |
@@ -70,12 +70,16 @@ Creates a user and returns a JWT. Public (no token required).
 
 **No `role` field** — every account created here is `Role.USER`, unconditionally (issue #74; a client-supplied `role` used to be honored, letting any unauthenticated caller self-promote to `ADMIN` on this `permitAll` endpoint). An `ADMIN` account can only be provisioned out-of-band via `AdminBootstrap`, an `ApplicationRunner` gated by `app.admin.bootstrap.enabled` (off by default — see `.env.example`), which creates or promotes the configured email at startup.
 
-**Response:** `200 OK`, body is a raw JWT string (not JSON-wrapped), with the saved role embedded as a claim.
+**Response:** `200 OK`, JSON `AuthResponse`:
+| Field | Type | Notes |
+|---|---|---|
+| `accessToken` | String | short-lived JWT — `role`/`userId` claims, send as `Authorization: Bearer <accessToken>` |
+| `refreshToken` | String | opaque, longer-lived; exchange via `POST /auth/refresh` below rather than re-authenticating |
 
 ---
 
 #### `POST /auth/login`
-Authenticates and returns a JWT. Public (no token required).
+Authenticates and returns an access/refresh token pair. Public (no token required).
 
 **Request body:**
 | Field | Type |
@@ -83,7 +87,19 @@ Authenticates and returns a JWT. Public (no token required).
 | `email` | String |
 | `password` | String |
 
-**Response:** `200 OK`, raw JWT string. `401` `ProblemDetail` (`"Invalid email or password"`) if the user doesn't exist or the password doesn't match — the same message either way, so the error doesn't reveal which one failed.
+**Response:** `200 OK`, JSON `AuthResponse` (same shape as register). `401` `ProblemDetail` (`"Invalid email or password"`) if the user doesn't exist or the password doesn't match — the same message either way, so the error doesn't reveal which one failed.
+
+---
+
+#### `POST /auth/refresh`
+Exchanges a refresh token for a new access/refresh token pair — rotation with reuse detection. Public (the refresh token itself is the credential; no bearer token needed).
+
+**Request body:**
+| Field | Type |
+|---|---|
+| `refreshToken` | String |
+
+**Response:** `200 OK`, JSON `AuthResponse` with a **new** access token and a **new** refresh token — the old refresh token is consumed by this call and can never be exchanged again. `401` `ProblemDetail` on any of four distinct failures: token not found, already revoked, expired, or **already used** — the last one atomically detects reuse (`UPDATE ... WHERE isUsed = false`, so two concurrent replays can't both win) and revokes every other refresh token issued to that user, since reuse of a consumed token implies it was compromised. See [Authentication & Identity § Refresh tokens](docs/features/authentication-and-identity.md) for the full rotation/reuse-detection design.
 
 ---
 
@@ -142,10 +158,6 @@ Fetch one activity log by its numeric id. Requires auth. **Open read by design**
 Records an activity session and computes XP (with a chance of a bonus roll). Requires auth. **Always writes as the caller** — the acting `userId` is derived server-side from the JWT (via the gateway-injected `userId` header), never from the request body, so one user cannot log activities or grant XP as another user.
 
 **Event-driven, not synchronous** (since issue [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)): the log is saved and an `ActivityLogged` event is written to an outbox table in the **same transaction**, then relayed to RabbitMQ and consumed asynchronously by the Gamification Service to apply the XP. This endpoint returns as soon as the log + outbox row are persisted — it does **not** wait for XP to actually be applied. See [`EVENT_DRIVEN_DECOUPLING.md`](docs/features/event-driven-decoupling.md).
-
-**Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
-
-**Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
 
 **Session integrity** (issue #67): duration is bounded and screened before any XP is committed. A session over `session-integrity.max-duration-minutes` (default 1440, i.e. 24h) or one that would push the caller's running total for that calendar day over `session-integrity.max-daily-minutes` (default 1440) is rejected outright with `400`. A session that passes both caps but is a statistical outlier against the caller's own (or, for new users, the category-wide) duration history — or simply exceeds `session-integrity.absolute-flag-minutes` (default 600) regardless of history — is still accepted and saved, but quarantined: see `reviewStatus` in the response table below and [Session Integrity](docs/features/session-integrity.md) for the full mechanism.
 

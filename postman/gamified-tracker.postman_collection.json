@@ -1214,6 +1214,168 @@
       ]
     },
     {
+      "name": "Analytics",
+      "item": [
+        {
+          "name": "Category Summary (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/category-summary",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "category-summary"
+              ]
+            },
+            "description": "Aggregated in-memory over activity_log grouped by Category (not a SQL GROUP BY) - see docs/features/analytics.md. The log created earlier in this run should show up under its HEALTH category."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "if (!pm.collectionVariables.get('activityLogId')) {",
+                  "    pm.test.skip('Skipped - no activityLogId (Create Activity Log likely failed, see that request)');",
+                  "} else {",
+                  "    pm.test('Contains a HEALTH entry with at least 1 session (the activity created earlier is HEALTH)', function () {",
+                  "        var entry = json.find(function (s) { return s.category === 'HEALTH'; });",
+                  "        pm.expect(entry).to.not.be.undefined;",
+                  "        pm.expect(entry.totalSessions).to.be.at.least(1);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "XP Over Time - 7 Days (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/xp-over-time?days=7",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "xp-over-time"
+              ],
+              "query": [
+                {
+                  "key": "days",
+                  "value": "7"
+                }
+              ]
+            },
+            "description": "Zero-filled daily timeline - always returns exactly `days` entries, even for days with no logs, so a client can chart a continuous line without patching gaps itself."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Exactly 7 entries, one per day, zero-filled', function () {",
+                  "    pm.expect(json.length).to.eql(7);",
+                  "});",
+                  "pm.test(\"today's entry (last, since the range ends today) has non-negative XP\", function () {",
+                  "    var today = json[json.length - 1];",
+                  "    pm.expect(today.totalXpEarned).to.be.at.least(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Weekly Report (User A)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userAToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/analytics/user/{{userAId}}/weekly-report",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "api",
+                "activitylog",
+                "analytics",
+                "user",
+                "{{userAId}}",
+                "weekly-report"
+              ]
+            },
+            "description": "Both the current and previous 7-day windows are fetched in a single query, then partitioned in memory. percentageChange is 100 (not Infinity) when the previous week was zero and this week isn't."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response has the expected fields', function () {",
+                  "    pm.expect(json).to.have.property('currentWeekXp');",
+                  "    pm.expect(json).to.have.property('previousWeekXp');",
+                  "    pm.expect(json).to.have.property('percentageChange');",
+                  "    pm.expect(json).to.have.property('dailyBreakdown');",
+                  "});",
+                  "pm.test('dailyBreakdown has exactly 7 zero-filled entries', function () {",
+                  "    pm.expect(json.dailyBreakdown.length).to.eql(7);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Level Tracker",
       "item": [
         {
