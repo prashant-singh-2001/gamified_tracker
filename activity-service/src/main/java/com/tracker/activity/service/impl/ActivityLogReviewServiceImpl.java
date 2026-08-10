@@ -131,7 +131,8 @@ public class ActivityLogReviewServiceImpl implements ActivityLogReviewService {
                 false,
                 0,
                 1.0,
-                activityLog.getReviewStatus()
+                activityLog.getReviewStatus(),
+                null // Issue #66: no write-time fuzzy-resolution context for a historical log
         );
     }
 }

@@ -39,7 +39,7 @@ class ActivityLogReviewControllerTest {
         Activity activity = Activity.builder().id(10L).name("Study").category(Category.STUDY)
                 .xpMultiplier(1.5).active(true).createdAt(now).build();
         return new ActivityLogResponse(id, 1L, activity, now.minusHours(1), now, 900L, 1350.0,
-                "notes", now, false, 1.0, false, 0, 1.0, status);
+                "notes", now, false, 1.0, false, 0, 1.0, status, null);
     }
 
     @Test

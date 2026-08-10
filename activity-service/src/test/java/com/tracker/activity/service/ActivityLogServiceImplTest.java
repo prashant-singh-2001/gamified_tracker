@@ -7,6 +7,7 @@ import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.ActivityStreak;
 import com.tracker.activity.dao.Category;
 import com.tracker.activity.dao.ReviewStatus;
+import com.tracker.activity.domain.ActivityMatcher;
 import com.tracker.activity.domain.DurationOutlierDetector;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
@@ -57,6 +58,8 @@ public class ActivityLogServiceImplTest {
     private ActivityStreakRepository activityStreakRepository;
     @Mock
     private DurationOutlierEvaluationService durationOutlierEvaluationService;
+    @Mock
+    private ActivityNameResolutionService activityNameResolutionService;
     // 1440 min (24h) session cap and 1440 min daily cap, matching the documented defaults;
     // absoluteFlagMinutes=600 also matches the documented default. Outlier detection on but the
     // mocked evaluation service abstains (INSUFFICIENT_SAMPLES) by default -- see below.
@@ -69,7 +72,8 @@ public class ActivityLogServiceImplTest {
     void setUp() {
         activityLogService = new ActivityLogServiceImpl(
                 activityLogRepository, activityRepository, outboxEventRepository, objectMapper,
-                activityStreakRepository, durationOutlierEvaluationService, sessionIntegrityProperties, meterRegistry);
+                activityStreakRepository, durationOutlierEvaluationService, sessionIntegrityProperties, meterRegistry,
+                activityNameResolutionService);
         // Default streak behaviour for the add-log tests that don't care about streaks: save
         // echoes its argument so applyStreak returns a non-null streak. lenient() because the
         // read-only tests never reach this path. findByUserIdAndActivityId returns Optional.empty()
@@ -85,6 +89,12 @@ public class ActivityLogServiceImplTest {
         // reason as above -- read-only tests never reach the daily-cap check at all.
         lenient().when(activityLogRepository.sumDurationForUserOnDay(any(), any(), any(), any()))
                 .thenReturn(0L);
+        // Issue #66 default: nothing was close enough to suggest, let alone auto-resolve. The one
+        // test that exercises the fuzzy-miss path overrides this explicitly; lenient() because
+        // every test whose activityName matches exactly never reaches this path at all.
+        lenient().when(activityNameResolutionService.resolve(anyString()))
+                .thenReturn(new ActivityNameResolutionService.NameResolution(
+                        null, 0.0, List.of(), ActivityMatcher.Reason.NO_MATCH));
     }
 
     private void stubActivityAndSave(Activity activity, Long generatedId) {
@@ -531,7 +541,8 @@ public class ActivityLogServiceImplTest {
         SessionIntegrityProperties disabled = new SessionIntegrityProperties(false, 1440, 3.5, 10, 100, 3.0, 600, 1440);
         ActivityLogServiceImpl serviceWithDetectionOff = new ActivityLogServiceImpl(
                 activityLogRepository, activityRepository, outboxEventRepository, objectMapper,
-                activityStreakRepository, durationOutlierEvaluationService, disabled, meterRegistry);
+                activityStreakRepository, durationOutlierEvaluationService, disabled, meterRegistry,
+                activityNameResolutionService);
 
         ActivityLogResponse body = serviceWithDetectionOff.addActivityLogResponseResponseEntity(1L, request).getBody();
 

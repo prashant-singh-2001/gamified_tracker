@@ -3,13 +3,16 @@ package com.tracker.activity.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tracker.activity.config.SessionIntegrityProperties;
+import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.ActivityStreak;
 import com.tracker.activity.dao.ReviewStatus;
 import com.tracker.activity.domain.DurationOutlierDetector;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
+import com.tracker.activity.dto.ActivityNameResolution;
 import com.tracker.activity.dto.StreakResponse;
+import com.tracker.activity.exception.ActivityNameUnresolvedException;
 import com.tracker.activity.exception.ActivityNotFoundException;
 import com.tracker.activity.exception.ImplausibleSessionException;
 import com.tracker.activity.exception.InactiveActivityException;
@@ -20,6 +23,7 @@ import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.repository.ActivityRepository;
 import com.tracker.activity.repository.ActivityStreakRepository;
 import com.tracker.activity.service.ActivityLogService;
+import com.tracker.activity.service.ActivityNameResolutionService;
 import com.tracker.activity.service.DurationOutlierEvaluationService;
 import com.tracker.contracts.event.ActivityLoggedEvent;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -55,6 +59,8 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     private final DurationOutlierEvaluationService durationOutlierEvaluationService;
     private final SessionIntegrityProperties sessionIntegrityProperties;
     private final MeterRegistry meterRegistry;
+    // Issue #66: consulted ONLY on an exact-match miss -- see resolveActivity(...).
+    private final ActivityNameResolutionService activityNameResolutionService;
 
     @Override
     public ResponseEntity<ActivityLogResponse> getActivityLogResponseEntity(Long id) {
@@ -62,7 +68,7 @@ public class ActivityLogServiceImpl implements ActivityLogService {
                 .orElseThrow(() -> new ActivityNotFoundException("Activity log not found: " + id));
 
         // historical logs don't have bonus/leveled flags stored yet — return defaults
-        return ResponseEntity.ok(mapToActivityLogResponse(activityLog, false, 1.0, false, 0, 1.0));
+        return ResponseEntity.ok(mapToActivityLogResponse(activityLog, false, 1.0, false, 0, 1.0, null));
     }
 
     @Override
@@ -75,7 +81,11 @@ public class ActivityLogServiceImpl implements ActivityLogService {
             throw new InvalidTimeRangeException("endTime must be after startTime");
         }
 
-        var activityLog = mapToActivityLog(userId, activityLogRequest);
+        // Issue #66: exact match first -- unchanged behaviour and zero added cost on the happy
+        // path; only a miss pays for the catalog read and the fuzzy pass.
+        ResolvedActivity resolved = resolveActivity(activityLogRequest.activityName());
+
+        var activityLog = mapToActivityLog(userId, activityLogRequest, resolved.activity());
         activityLog.setDurationMinutes(
                 Duration.between(activityLog.getStartTime(), activityLog.getEndTime()).toMinutes());
         activityLog.setUserId(userId);
@@ -150,7 +160,38 @@ public class ActivityLogServiceImpl implements ActivityLogService {
 
         boolean bonusApplied = bonus != 1.0;
         // leveledUp is now EVENTUAL (XP applied async by the consumer) -> false at write time
-        return ResponseEntity.ok(mapToActivityLogResponse(saved, bonusApplied, bonus, false, streak.getCurrentStreak(), streakMult));
+        return ResponseEntity.ok(mapToActivityLogResponse(saved, bonusApplied, bonus, false,
+                streak.getCurrentStreak(), streakMult, resolved.nameResolution()));
+    }
+
+    /**
+     * Issue #66. Exact name wins outright; only a miss consults the fuzzy resolver, which either
+     * hands back a confidently-matched active activity or the ranked alternatives to put on the 404.
+     */
+    private ResolvedActivity resolveActivity(String requestedName) {
+        var exactMatch = activityRepository.findByName(requestedName);
+        if (exactMatch.isPresent()) {
+            return new ResolvedActivity(exactMatch.get(), null); // unchanged behaviour, zero added cost
+        }
+
+        var resolution = activityNameResolutionService.resolve(requestedName);
+        if (!resolution.resolved()) {
+            // reason tag separates "nothing was close" from "two candidates tied" -- same idea as
+            // the basis tag on activity.log.flagged. NEVER tag with the user-typed name: unbounded
+            // cardinality.
+            meterRegistry.counter("activity.log.name.unresolved",
+                    "reason", resolution.reason().name()).increment();
+            throw new ActivityNameUnresolvedException(requestedName, resolution.suggestions());
+        }
+
+        Activity activity = resolution.activity();
+        meterRegistry.counter("activity.log.name.autoresolved",
+                "category", activity.getCategory().name()).increment();
+        return new ResolvedActivity(activity,
+                new ActivityNameResolution(requestedName, activity.getName(), resolution.score()));
+    }
+
+    private record ResolvedActivity(Activity activity, ActivityNameResolution nameResolution) {
     }
 
     /**
@@ -187,18 +228,21 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(Long id) {
         var activityLogList = activityLogRepository.findByUserId(id);
 
-        var activityLogResponses = activityLogList.stream().map(a -> mapToActivityLogResponse(a, false, 1.0, false, 0, 1.0)).toList();
+        var activityLogResponses = activityLogList.stream().map(a -> mapToActivityLogResponse(a, false, 1.0, false, 0, 1.0, null)).toList();
 
         return ResponseEntity.ok(activityLogResponses);
     }
 
-    private ActivityLog mapToActivityLog(Long userId, ActivityLogRequest activityLogRequest) {
-        var activity = activityRepository.findByName(activityLogRequest.activityName())
-                .orElseThrow(() -> new ActivityNotFoundException(
-                        "Activity not found: " + activityLogRequest.activityName()));
+    private ActivityLog mapToActivityLog(Long userId, ActivityLogRequest activityLogRequest, Activity activity) {
+        // OLD (#66): exact-match-only resolution lived here. It moved into resolveActivity(...) so
+        // the caller can also surface a fuzzy substitution on the response.
+        // var activity = activityRepository.findByName(activityLogRequest.activityName())
+        //         .orElseThrow(() -> new ActivityNotFoundException(
+        //                 "Activity not found: " + activityLogRequest.activityName()));
 
-        // Issue #7: reject log attempts against soft-deleted activities before any
-        // XP or streak side-effects are applied.
+        // Issue #7: reject log attempts against soft-deleted activities before any XP or streak
+        // side-effects are applied. Unreachable via the #66 auto-resolve path -- the matcher never
+        // resolves onto an inactive candidate -- so this only fires on an exact hit.
         if (!activity.isActive()) {
             throw new InactiveActivityException(activityLogRequest.activityName());
         }
@@ -213,7 +257,7 @@ public class ActivityLogServiceImpl implements ActivityLogService {
                 .build();
     }
 
-    private ActivityLogResponse mapToActivityLogResponse(ActivityLog activityLog, boolean bonusApplied, double bonusMultiplier, boolean leveledUp, int currentStreak, double streakMult) {
+    private ActivityLogResponse mapToActivityLogResponse(ActivityLog activityLog, boolean bonusApplied, double bonusMultiplier, boolean leveledUp, int currentStreak, double streakMult, ActivityNameResolution nameResolution) {
         return new ActivityLogResponse(
                 activityLog.getId(),
                 activityLog.getUserId(),
@@ -229,7 +273,8 @@ public class ActivityLogServiceImpl implements ActivityLogService {
                 leveledUp,
                 currentStreak,
                 streakMult,
-                activityLog.getReviewStatus()
+                activityLog.getReviewStatus(),
+                nameResolution
         );
     }
 
