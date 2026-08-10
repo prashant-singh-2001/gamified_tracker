@@ -2,6 +2,7 @@ package com.tracker.gateway.security;
 
 import com.tracker.gateway.user.Role;
 import io.jsonwebtoken.security.Keys;
+import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -41,6 +42,17 @@ public class SecurityConfig {
 
         http.csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
+                        // #95: this chain also governs the container's INTERNAL ERROR dispatch to
+                        // Boot's /error (spring.security.filter.dispatcher-types defaults to
+                        // ASYNC,ERROR,REQUEST). On that dispatch the re-authenticating
+                        // OncePerRequestFilters are skipped, so the context is anonymous, /error
+                        // matches no permitAll entry below, and Spring Security writes its own
+                        // error response OVER the real downstream status and body — masking every
+                        // proxied error (a 404, a 500, anything) as 401/403. Must stay FIRST:
+                        // matchers are evaluated in declaration order. This opens nothing —
+                        // ERROR/FORWARD are internal dispatches, and the originating REQUEST
+                        // dispatch was already authorized by the rules below.
+                        .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()
                         .requestMatchers("/auth/**", "/swagger-ui.html", "/swagger-ui/**",
                                 "/v3/api-docs", "/v3/api-docs/**", "/swagger-resources/**", "/actuator/**")
                         .permitAll()

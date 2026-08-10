@@ -2,11 +2,14 @@ package com.tracker.gateway.security;
 
 import com.tracker.gateway.auth.JwtUtil;
 import com.tracker.gateway.user.Role;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
 import io.github.bucket4j.distributed.proxy.AsyncProxyManager;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -17,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -92,5 +96,25 @@ class SecurityRulesTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isForbidden());
+    }
+
+    // #95: before the fix, this chain's .anyRequest().authenticated() also governed the
+    // container's internal ERROR dispatch to /error. On that dispatch the re-authenticating
+    // filters are skipped, the context is anonymous, /error matched no permitAll entry, and
+    // Spring Security wrote an empty 403 over the real downstream status — masking every
+    // proxied error (a 404, a 500, anything) identically. Simulating the ERROR dispatch
+    // directly (rather than forcing a real downstream failure) isolates the security-chain
+    // behavior from routing/load-balancer noise.
+    @Test
+    @DisplayName("an internal ERROR dispatch is permitted, so a real downstream status survives instead of an empty 403 (#95)")
+    void errorDispatch_isPermittedAndKeepsTheOriginalStatus() throws Exception {
+        mockMvc.perform(get("/error")
+                        .with(request -> {
+                            request.setDispatcherType(DispatcherType.ERROR);
+                            request.setAttribute(RequestDispatcher.ERROR_STATUS_CODE, 404);
+                            request.setAttribute(RequestDispatcher.ERROR_REQUEST_URI, "/api/activitylog/");
+                            return request;
+                        }))
+                .andExpect(status().isNotFound()); // was 403 with an empty body before the fix
     }
 }
