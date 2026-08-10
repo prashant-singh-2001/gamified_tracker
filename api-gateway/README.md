@@ -54,7 +54,7 @@ JSON bodies. `/auth/**` and `/actuator/**` are public; all `/api/**` paths requi
 ### Auth — `/auth`
 
 #### `POST /auth/register`
-Create a user and return a JWT.
+Create a user and return an access/refresh token pair.
 
 Request:
 | Field | Type | Notes |
@@ -65,12 +65,19 @@ Request:
 
 No `role` field — see the admin-provisioning note above.
 
-Response `200 OK`: a raw JWT string (not JSON-wrapped), carrying `role` (always `USER` here) and `userId` claims.
+Response `200 OK`: JSON `{ "accessToken", "refreshToken" }` — `accessToken` is the short-lived JWT (carrying `role`, always `USER` here, and `userId` claims); `refreshToken` is opaque, exchanged via `POST /auth/refresh` below.
 
 #### `POST /auth/login`
-Authenticate and return a JWT. Request: `{ "email", "password" }`.
-- `200 OK` → raw JWT string
+Authenticate and return an access/refresh token pair. Request: `{ "email", "password" }`.
+- `200 OK` → same `{ "accessToken", "refreshToken" }` shape as register
 - `401 Unauthorized` → `ProblemDetail` (`"Invalid email or password"`) — same message whether the email is unknown or the password is wrong (no user enumeration).
+
+#### `POST /auth/refresh`
+Exchange a refresh token for a new pair — rotation with reuse detection (see
+[Authentication & Identity § Refresh tokens](../docs/features/authentication-and-identity.md)).
+Request: `{ "refreshToken" }`.
+- `200 OK` → a **new** `{ "accessToken", "refreshToken" }` pair; the old refresh token is consumed and cannot be reused
+- `401 Unauthorized` → not found, revoked, expired, or already used — reuse of an already-used token also revokes every other refresh token for that user (assumed compromise)
 
 ### Activity (routed) — `/api/activity`
 
@@ -197,10 +204,11 @@ cd api-gateway && mvn spring-boot:run
 
 ### Quick auth walkthrough
 ```bash
-# 1. register (returns a token)
+# 1. register (returns an { accessToken, refreshToken } pair; no "role" field on the wire — see above)
 TOKEN=$(curl -s -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret","role":"USER"}')
+  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret"}' \
+  | jq -r '.accessToken')
 
 # 2. call a protected, routed endpoint
 curl http://localhost:8080/api/activity -H "Authorization: Bearer $TOKEN"

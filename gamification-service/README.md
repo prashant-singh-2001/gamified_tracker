@@ -16,11 +16,13 @@ The gamification engine. When a user logs an activity, activity-service publishe
                                 level_tracker_archive
                                 activity_level_threshold
                                 processed_event
+                                manual_xp_award
 
-  (POST /level is still directly reachable via api-gateway / :8082 — a second, synchronous caller)
+  (POST /level is now an ADMIN-only manual-award door — capped + audited, see below — not a
+   second normal way for players to earn XP)
 ```
 
-Called by: **activity-service** (async, via RabbitMQ, after each activity log) and directly via `POST /level` (through api-gateway or `:8082`). Registers with **Eureka** (8761); persists to **PostgreSQL**; consumes from **RabbitMQ**.
+Called by: **activity-service** (async, via RabbitMQ, after each activity log — this is how players actually earn XP) and, separately, an admin operator via `POST /level` (through api-gateway or `:8082`) for one-off manual XP grants. Registers with **Eureka** (8761); persists to **PostgreSQL**; consumes from **RabbitMQ**.
 
 ## Responsibilities
 
@@ -53,25 +55,26 @@ Fetch one row by its numeric surrogate id.
 - `404 Not Found` → `ProblemDetail` (`"LevelTracker with id: {id} not found"`)
 
 #### `POST /level`
-Create-or-update XP for a `(userId, activityId)` pair and recompute level. **Two callers now** (since [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)): this HTTP endpoint — directly reachable through the Gateway at `/api/level` or `:8082` — and the `ActivityLoggedListener` RabbitMQ consumer, which calls `LevelTrackerServiceImpl.save(userId, dto)` **in-process**, bypassing this controller and the header entirely (its `userId` comes from the event payload, and it's deduped against `processed_event` before `save` runs). Requires a `userId` request header (Long, **required** — missing it is rejected before the service layer runs) **only for the HTTP path**; through the Gateway this is a trusted, JWT-derived value, but a direct call to `:8082` must supply it manually since this service has no security layer of its own.
+**Admin-only manual XP award (issue #74).** Used to be a public, unbounded write reachable by any authenticated user — any caller could pick an arbitrary `activityId`/`xp` and mint themselves XP directly, bypassing activity-service, the outbox, and the idempotency guard entirely. Now gated `hasRole("ADMIN")` at the Gateway (this service has no security layer of its own, so a direct call to `:8082` skips that check — the caveat noted throughout this doc); capped at `10000.0` XP per call; and audited — every call writes a `manual_xp_award` row (actor, target, activity, xp, timestamp, see Data model below) before the XP is applied, via `LevelTrackerServiceImpl.awardManually`.
 
-Request — `LevelTrackerRequestDTO` (no `userId` field — see header above):
+**Two callers now** (since [#16](https://github.com/prashant-singh-2001/gamified_tracker/issues/16)): the `ActivityLoggedListener` RabbitMQ consumer — the real path players' XP comes from — which calls `LevelTrackerServiceImpl.save(userId, dto)` **in-process**, bypassing this controller, the header, and the admin gate entirely (its `userId` comes from the event payload, and it's deduped against `processed_event` before `save` runs); and this HTTP endpoint, which now goes through `awardManually` first (the audit write) before delegating to that same `save`. Requires a `userId` request header (Long, **required**) identifying the **acting admin** — through the Gateway this is a trusted, JWT-derived value, but a direct call to `:8082` must supply it manually since this service has no security layer of its own.
+
+Request — `ManualXpAwardRequest`:
 | Field | Type | Notes |
 |-------|------|-------|
-| `activityId` | Long | |
-| `xp` | double | XP to **add**. Must be `>= 0` — a compact-constructor guard rejects negatives |
+| `targetUserId` | Long | optional — the user to award XP to. Omitted → defaults to the acting admin (the `userId` header) |
+| `activityId` | Long | required |
+| `xp` | double | XP to **add**. `@PositiveOrZero` **and** `@DecimalMax(10000.0)` — either violation is `400` with the specific field message (e.g. `"xp exceeds the per-award cap of 10000"`), via the `MethodArgumentNotValidException` handler added alongside this fix |
 
-Response `200 OK` — `LevelTrackerDto`:
+Response `200 OK` — `LevelTrackerDto`, for the **target** user:
 | Field | Type | Notes |
 |-------|------|-------|
-| `userId` | Long | |
+| `userId` | Long | the target, not necessarily the acting admin |
 | `activityId` | Long | |
 | `level` | Integer | recomputed |
 | `totalXp` | double | accumulated total after this call |
 | `currentLevelXp` | double | XP within the current level (`totalXp − threshold.xpRequired`) |
 | `leveledUp` | boolean | `true` only if **this specific call** crossed a threshold. Every `GET` endpoint below hardcodes this to `false`, regardless of the row's actual level — it reflects the outcome of a write, not stored state |
-
-- `400 Bad Request` → `ProblemDetail` (`"Invalid request body"`) if `xp` is negative.
 
 #### `GET /level/user/{userId}`
 All level-tracker rows for a user (one per activity they've logged). → `200 OK`, array.
@@ -133,6 +136,18 @@ Unique constraint **`uk_level_tracker_user_activity`** on `(user_id, activity_id
 
 The unique PK is what makes redelivery safe: a racing/duplicate delivery hits a constraint violation on `save`, the enclosing `@Transactional` method rolls back (XP not double-applied), and the message gets redelivered — by which point `existsById` is `true` and it's skipped.
 
+**`manual_xp_award`** — append-only audit trail for admin-triggered `POST /level` calls (issue #74; `V3__create_manual_xp_award.sql`):
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | bigint | PK, identity |
+| `actor_user_id` | bigint | the admin who made the call |
+| `target_user_id` | bigint | who received the XP (defaults to the actor if `targetUserId` was omitted) |
+| `activity_id` | bigint | |
+| `xp` | double | |
+| `awarded_at` | timestamp | |
+
+Written by `LevelTrackerServiceImpl.awardManually` **before** it delegates to `save()` — the event-driven path (`ActivityLoggedListener`) never writes here, only the manual-award door does, so this table is a reliable log of every admin intervention.
+
 ## Key internal flow — `LevelTrackerServiceImpl.save()`
 
 Concurrency-safe XP accumulation (fixes the lost-update race — [issue #5](https://github.com/prashant-singh-2001/gamified_tracker/issues/5), merged in [PR #29](https://github.com/prashant-singh-2001/gamified_tracker/pull/29)):
@@ -152,7 +167,7 @@ The idempotent RabbitMQ consumer (new in #16 — full design: [`EVENT_DRIVEN_DEC
 1. `@RabbitListener(queues = "${messaging.queue}")` receives a `com.tracker.contracts.event.ActivityLoggedEvent(logId, userId, activityId, xpEarned)` — defined once in the shared `contracts` module, not duplicated per service (see [issue #23](https://github.com/prashant-singh-2001/gamified_tracker/issues/23)).
 2. **Dedup check:** `processedEventRepository.existsById(logId)` — if already processed, log and return (no-op).
 3. **Dedup guard, written first:** `processedEventRepository.save(new ProcessedEvent(logId, now()))`. If a concurrent duplicate already inserted this key, this throws, the `@Transactional` method rolls back, and the message is redelivered — landing on step 2 as a no-op next time.
-4. Calls the **same** `LevelTrackerServiceImpl.save(userId, dto)` the HTTP `POST /level` endpoint uses — no business-logic duplication.
+4. Calls the **same** `LevelTrackerServiceImpl.save(userId, dto)` primitive `awardManually` delegates to for the HTTP `POST /level` endpoint — no business-logic duplication. This path skips `awardManually` entirely, so it never writes a `manual_xp_award` row — only admin-triggered calls do.
 5. All in one `@Transactional` method, so the dedup write and the XP application succeed or fail together.
 
 ## Configuration
@@ -173,7 +188,7 @@ Reads standard env vars (see root [`.env.example`](../.env.example)):
 
 - **Calls:** nothing over HTTP/Feign (leaf service for outbound calls).
 - **Consumes from:** RabbitMQ (`com.tracker.contracts.event.ActivityLoggedEvent`, queue `gamification.activity-logged.q`) — published by activity-service's outbox relay.
-- **Called by:** activity-service (indirectly, via RabbitMQ) and directly via `POST /level` (api-gateway or `:8082`).
+- **Called by:** activity-service (indirectly, via RabbitMQ — the normal XP path) and an ADMIN-gated `POST /level` (api-gateway or `:8082`) for manual awards.
 - **Infra:** Eureka (registration), PostgreSQL (persistence), RabbitMQ (messaging, incl. DLQ).
 
 ## Running
@@ -202,7 +217,8 @@ Covered by `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (incl
 ## Troubleshooting
 
 - **Everyone stays at level 1** — no thresholds are seeded by default. `POST /threshold` a curve (e.g. level 2 at `xpRequired: 100`) for the activity first. (A default curve is proposed in [issue #8](https://github.com/prashant-singh-2001/gamified_tracker/issues/8).)
-- **`POST /level` returns 400 with a negative-xp message** — `xp` was negative; the DTO rejects it before persistence. **A different 400 (missing header)** means the `userId` request header wasn't sent — required on every direct `POST /level` call (the RabbitMQ consumer path doesn't use this header at all).
+- **`POST /level` returns 403** — the token's role is `USER`, not `ADMIN` (issue #74); this endpoint is admin-only, hit `:8081`'s `POST /activitylog/` instead to earn XP the normal way.
+- **`POST /level` returns 400 with a field message** — `xp` was negative, or over the 10,000 per-call cap; the `MethodArgumentNotValidException` handler returns the exact validation message rather than an opaque `400`. **A different 400 (missing header)** means the `userId` request header wasn't sent — required on every direct `POST /level` call (the RabbitMQ consumer path doesn't use this header at all).
 - **XP from a logged activity never shows up** — check the RabbitMQ management UI (`http://localhost:15672`, guest/guest) for the `gamification.activity-logged.q` queue depth and its DLQ (`gamification.activity-logged.dlq`); a poison message lands there after 3 failed attempts.
 - **Health check:** `curl http://localhost:8082/actuator/health` — `spring-boot-starter-actuator` is wired (exposes `health`, `info`; Docker healthcheck depends on this).
 - **Schema/constraint errors on startup after a model change** — `ddl-auto: update` won't retrofit new constraints onto existing data; recreate the dev volume with `docker compose down -v`.
