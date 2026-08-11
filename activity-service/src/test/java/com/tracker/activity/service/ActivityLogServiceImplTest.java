@@ -9,8 +9,11 @@ import com.tracker.activity.dao.Category;
 import com.tracker.activity.dao.ReviewStatus;
 import com.tracker.activity.domain.ActivityMatcher;
 import com.tracker.activity.domain.DurationOutlierDetector;
+import com.tracker.activity.domain.MatchField;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
+import com.tracker.activity.dto.ActivitySuggestion;
+import com.tracker.activity.exception.ActivityNameUnresolvedException;
 import com.tracker.activity.exception.ActivityNotFoundException;
 import com.tracker.activity.exception.ImplausibleSessionException;
 import com.tracker.activity.exception.InvalidTimeRangeException;
@@ -629,5 +632,88 @@ public class ActivityLogServiceImplTest {
         assertDoesNotThrow(() -> activityLogService.addActivityLogResponseResponseEntity(1L, request));
 
         verify(activityLogRepository).save(any(ActivityLog.class));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Issue #66 — fuzzy activityName resolution: auto-resolve, ambiguity guard, counters
+    // ──────────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("an exact activityName match never consults the fuzzy resolver")
+    void addActivityLog_exactMatch_neverConsultsResolver() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Study", start, start.plusMinutes(30), "notes", start);
+
+        Activity active = Activity.builder().id(10L).name("Study").category(Category.STUDY)
+                .xpMultiplier(1.5).active(true).build();
+        stubActivityAndSave(active, 300L);
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(1L, request).getBody();
+
+        assertNotNull(body);
+        assertNull(body.nameResolution());
+        verifyNoInteractions(activityNameResolutionService);
+    }
+
+    @Test
+    @DisplayName("a confident fuzzy match auto-resolves: the log is saved against the RESOLVED activity, and nameResolution is populated on the response")
+    void addActivityLog_fuzzyMatch_autoResolvesAndSavesAgainstResolvedActivity() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Runnning", start, start.plusMinutes(30), "notes", start);
+
+        Activity running = Activity.builder().id(11L).name("Running").category(Category.HEALTH)
+                .xpMultiplier(1.3).active(true).build();
+        when(activityRepository.findByName("Runnning")).thenReturn(Optional.empty());
+        var suggestion = new ActivitySuggestion(
+                "Running", Category.HEALTH, true, 0.946, MatchField.NAME);
+        when(activityNameResolutionService.resolve("Runnning")).thenReturn(
+                new ActivityNameResolutionService.NameResolution(running, 0.946, List.of(suggestion), ActivityMatcher.Reason.AUTO_RESOLVED));
+        when(activityLogRepository.save(any(ActivityLog.class))).thenAnswer(i -> {
+            ActivityLog log = i.getArgument(0);
+            log.setId(301L);
+            return log;
+        });
+
+        ActivityLogResponse body = activityLogService.addActivityLogResponseResponseEntity(1L, request).getBody();
+
+        assertNotNull(body);
+        assertEquals("Running", body.activity().getName());
+        assertNotNull(body.nameResolution());
+        assertEquals("Runnning", body.nameResolution().requestedName());
+        assertEquals("Running", body.nameResolution().resolvedName());
+        assertEquals(0.946, body.nameResolution().score(), 1e-9);
+
+        ArgumentCaptor<ActivityLog> captor = ArgumentCaptor.forClass(ActivityLog.class);
+        verify(activityLogRepository).save(captor.capture());
+        assertEquals("Running", captor.getValue().getActivity().getName());
+        verify(outboxEventRepository, times(1)).save(any(OutboxEvent.class));
+
+        assertEquals(1, meterRegistry.get("activity.log.name.autoresolved").tag("category", "HEALTH").counter().count(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("an ambiguous fuzzy match (two candidates too close together) is rejected with no log, streak, or outbox row -- no XP for a guess")
+    void addActivityLog_ambiguousFuzzyMatch_isRejectedWithNoXp() {
+        LocalDateTime start = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest("Studyng", start, start.plusMinutes(30), "notes", start);
+
+        when(activityRepository.findByName("Studyng")).thenReturn(Optional.empty());
+        var studySuggestion = new ActivitySuggestion(
+                "Study", Category.STUDY, true, 0.943, MatchField.NAME);
+        var studyingSuggestion = new ActivitySuggestion(
+                "Studying", Category.STUDY, true, 0.975, MatchField.NAME);
+        when(activityNameResolutionService.resolve("Studyng")).thenReturn(
+                new ActivityNameResolutionService.NameResolution(
+                        null, 0.0, List.of(studyingSuggestion, studySuggestion), ActivityMatcher.Reason.AMBIGUOUS));
+
+        var ex = assertThrows(ActivityNameUnresolvedException.class,
+                () -> activityLogService.addActivityLogResponseResponseEntity(1L, request));
+
+        assertEquals(2, ex.getSuggestions().size());
+        verify(activityLogRepository, never()).save(any());
+        verifyNoInteractions(outboxEventRepository);
+        verifyNoInteractions(activityStreakRepository);
+
+        assertEquals(1, meterRegistry.get("activity.log.name.unresolved").tag("reason", "AMBIGUOUS").counter().count(), 1e-9);
     }
 }
