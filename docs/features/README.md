@@ -1,6 +1,6 @@
 # Feature Docs — Gamified Tracker
 
-Sixteen standalone deep-dives into the notable engineering work in this codebase — each one covers
+Seventeen standalone deep-dives into the notable engineering work in this codebase — each one covers
 what the feature is, why it's worth a second look, how it actually works (with a diagram and the
 load-bearing code), its config, and a way to try it live. Verified against the current source at
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
@@ -43,6 +43,7 @@ territory.
 | Doc | What it demonstrates |
 |---|---|
 | [Error Handling](error-handling.md) | One RFC 7807 `ProblemDetail` contract across every service, no-user-enumeration login errors, and byte-for-byte pass-through through the gateway — plus an honest gap: Spring Security's own 401/403 aren't in that shape yet |
+| [Fuzzy Activity-Name Matching](fuzzy-activity-matching.md) | A hand-written Jaro-Winkler matcher scoring name + description + category, split behind a provider seam for a future embedding/LLM scorer, with two rails on automatic substitution — a high threshold and an ambiguity guard — because the XP it awards is irreversible |
 | [Testing Strategy](testing-strategy.md) | A sliced test pyramid (48 classes) with `InOrder`/`ArgumentCaptor` side-effect verification and a serialized-shape wire-contract guard |
 
 ## Platform
@@ -69,6 +70,7 @@ territory.
 | Achievement badges | gamification-service | `service/impl/AchievementServiceImpl.java` |
 | Streaks | activity-service | `service/impl/ActivityLogServiceImpl.java` (`applyStreak`) |
 | Analytics | activity-service | `service/impl/AnalyticsServiceImpl.java` |
+| Fuzzy activity-name matching | activity-service | `domain/ActivityMatcher.java`, `domain/ActivityNameScorer.java`, `service/ActivityNameResolutionService.java` |
 | Error handling | all three web services | `exception/GlobalExceptionHandler.java` |
 | Testing strategy | all six modules | `*/src/test/...` |
 | Discovery, health & containers | all four services | `docker-compose.yml`, `*/Dockerfile` |
