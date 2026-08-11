@@ -58,7 +58,7 @@ Tokens are signed HS256 JWTs and carry the user's `role` as a claim. The signing
 ### Auth
 
 #### `POST /auth/register`
-Creates a user and returns a JWT. Public (no token required).
+Creates a user and returns an access/refresh token pair. Public (no token required).
 
 **Request body:**
 | Field | Type | Notes |
@@ -70,12 +70,16 @@ Creates a user and returns a JWT. Public (no token required).
 
 **No `role` field** — every account created here is `Role.USER`, unconditionally (issue #74; a client-supplied `role` used to be honored, letting any unauthenticated caller self-promote to `ADMIN` on this `permitAll` endpoint). An `ADMIN` account can only be provisioned out-of-band via `AdminBootstrap`, an `ApplicationRunner` gated by `app.admin.bootstrap.enabled` (off by default — see `.env.example`), which creates or promotes the configured email at startup.
 
-**Response:** `200 OK`, body is a raw JWT string (not JSON-wrapped), with the saved role embedded as a claim.
+**Response:** `200 OK`, JSON `AuthResponse`:
+| Field | Type | Notes |
+|---|---|---|
+| `accessToken` | String | short-lived JWT — `role`/`userId` claims, send as `Authorization: Bearer <accessToken>` |
+| `refreshToken` | String | opaque, longer-lived; exchange via `POST /auth/refresh` below rather than re-authenticating |
 
 ---
 
 #### `POST /auth/login`
-Authenticates and returns a JWT. Public (no token required).
+Authenticates and returns an access/refresh token pair. Public (no token required).
 
 **Request body:**
 | Field | Type |
@@ -83,7 +87,19 @@ Authenticates and returns a JWT. Public (no token required).
 | `email` | String |
 | `password` | String |
 
-**Response:** `200 OK`, raw JWT string. `401` `ProblemDetail` (`"Invalid email or password"`) if the user doesn't exist or the password doesn't match — the same message either way, so the error doesn't reveal which one failed.
+**Response:** `200 OK`, JSON `AuthResponse` (same shape as register). `401` `ProblemDetail` (`"Invalid email or password"`) if the user doesn't exist or the password doesn't match — the same message either way, so the error doesn't reveal which one failed.
+
+---
+
+#### `POST /auth/refresh`
+Exchanges a refresh token for a new access/refresh token pair — rotation with reuse detection. Public (the refresh token itself is the credential; no bearer token needed).
+
+**Request body:**
+| Field | Type |
+|---|---|
+| `refreshToken` | String |
+
+**Response:** `200 OK`, JSON `AuthResponse` with a **new** access token and a **new** refresh token — the old refresh token is consumed by this call and can never be exchanged again. `401` `ProblemDetail` on any of four distinct failures: token not found, already revoked, expired, or **already used** — the last one atomically detects reuse (`UPDATE ... WHERE isUsed = false`, so two concurrent replays can't both win) and revokes every other refresh token issued to that user, since reuse of a consumed token implies it was compromised. See [Authentication & Identity § Refresh tokens](docs/features/authentication-and-identity.md) for the full rotation/reuse-detection design.
 
 ---
 
