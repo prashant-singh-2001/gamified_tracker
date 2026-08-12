@@ -73,7 +73,10 @@ public class InsightsServiceImpl implements InsightsService {
         try {
             Optional<String> result = weeklyDigestNarrator.narrate(facts);
             if (result.isPresent()) {
-                narrative = result.get();
+                // Bounded here, not just trusted from the narrator: any WeeklyDigestNarrator
+                // implementation funnels through this one place, so the maxNarrativeChars
+                // invariant on WeeklyInsightsResponse holds regardless of which one is wired in.
+                narrative = boundNarrative(result.get());
                 narrativeStatus = NarrativeStatus.GENERATED;
             } else {
                 narrativeStatus = insightsProperties.enabled() ? NarrativeStatus.UNAVAILABLE : NarrativeStatus.DISABLED;
@@ -127,5 +130,12 @@ public class InsightsServiceImpl implements InsightsService {
 
     private static double nullToZero(Double value) {
         return value != null ? value : 0.0;
+    }
+
+    private String boundNarrative(String narrative) {
+        if (narrative == null || narrative.length() <= insightsProperties.maxNarrativeChars()) {
+            return narrative;
+        }
+        return narrative.substring(0, insightsProperties.maxNarrativeChars());
     }
 }
