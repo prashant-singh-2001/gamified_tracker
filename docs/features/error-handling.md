@@ -165,6 +165,16 @@ Because routing is a genuine reverse proxy (see [API Gateway Routing](api-gatewa
 untouched rather than re-serializing it. `GET /api/activity/does-not-exist` and
 `GET /api/level/999999` each return the exact body their owning service produces directly.
 
+**This guarantee was silently broken for a while (issue #95).** `SecurityConfig`'s
+`.anyRequest().authenticated()` also governs the servlet container's *internal* `ERROR` dispatch to
+Boot's `/error` (Spring Boot's `spring.security.filter.dispatcher-types` includes `ERROR` by
+default). With no matcher permitting that dispatch, the security context on it is anonymous, and
+Spring Security's own entry point wrote a `401`/`403` **over** the real downstream status and body —
+so every proxied error, not just auth failures, came back looking like an auth failure. Fixed by
+adding `.dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()` as the
+**first** matcher (order matters — it must precede `.anyRequest().authenticated()`). The pass-through
+claim above is a property of that matcher now, not just of routing being a real reverse proxy.
+
 ## Known edges (honest inventory)
 
 - Only the exceptions above are advised; anything else falls through to Spring's defaults — there's

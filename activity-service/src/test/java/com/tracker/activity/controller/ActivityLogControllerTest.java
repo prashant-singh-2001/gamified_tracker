@@ -62,7 +62,8 @@ public class ActivityLogControllerTest {
                 false,
                 0,
                 1.0,
-                ReviewStatus.CLEARED
+                ReviewStatus.CLEARED,
+                null
         );
 
         //Act
@@ -123,7 +124,8 @@ public class ActivityLogControllerTest {
                 false,
                 0,
                 1.0,
-                ReviewStatus.CLEARED
+                ReviewStatus.CLEARED,
+                null
         );
 
         //Act
@@ -189,7 +191,8 @@ public class ActivityLogControllerTest {
                 false,
                 0,
                 1.0,
-                ReviewStatus.CLEARED
+                ReviewStatus.CLEARED,
+                null
         );
         ActivityLogResponse log2 = new ActivityLogResponse(
                 2L,
@@ -206,7 +209,8 @@ public class ActivityLogControllerTest {
                 false,
                 0,
                 1.0,
-                ReviewStatus.CLEARED
+                ReviewStatus.CLEARED,
+                null
         );
         ActivityLogResponse log3 = new ActivityLogResponse(
                 3L,
@@ -223,7 +227,8 @@ public class ActivityLogControllerTest {
                 false,
                 0,
                 1.0,
-                ReviewStatus.CLEARED
+                ReviewStatus.CLEARED,
+                null
         );
 
         //Act

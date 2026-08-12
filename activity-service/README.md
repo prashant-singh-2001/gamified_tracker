@@ -79,7 +79,7 @@ Record a session, compute XP, save it, and publish an `ActivityLogged` event (as
 Request — `ActivityLogRequest` (no `userId` field — see header above):
 | Field | Type | Notes |
 |-------|------|-------|
-| `activityName` | String | must match an existing `Activity.name`, else `404` |
+| `activityName` | String | matched exactly first; on a miss, fuzzy-resolved against every activity's name/description/category (issue #66) — see [Fuzzy activity-name resolution](#fuzzy-activity-name-resolution-issue-66) below |
 | `startTime` | ISO-8601 | |
 | `endTime` | ISO-8601 | should be after `startTime` |
 | `notes` | String | optional |
@@ -90,7 +90,7 @@ Response `200 OK` — `ActivityLogResponse`:
 |-------|------|-------|
 | `id` | Long | |
 | `userId` | Long | |
-| `activity` | object | the full `Activity` |
+| `activity` | object | the full `Activity` — the **resolved** one if `activityName` was fuzzy-matched |
 | `startTime` / `endTime` | ISO-8601 | |
 | `durationMinutes` | Long | `endTime − startTime` |
 | `xpEarned` | double | `durationMinutes × activity.xpMultiplier × bonus` |
@@ -99,8 +99,9 @@ Response `200 OK` — `ActivityLogResponse`:
 | `bonusApplied` | boolean | `true` if the XP-bonus roll succeeded for this session |
 | `bonusMultiplier` | double | the multiplier actually used — `1.0` if no bonus, else the rolled `[1.1, 1.5)` value |
 | `leveledUp` | boolean | **Always `false` on this response.** XP is applied asynchronously by gamification-service's RabbitMQ consumer, so this endpoint can't know yet whether the session leveled the user up — check `GET /level/user/{id}` on gamification-service (or `GET /api/level/user/{id}` via the Gateway) shortly after |
+| `nameResolution` | object \| null | (issue #66) non-null **only** when `activityName` was fuzzy-resolved: `{ requestedName, resolvedName, score }`. `null` on an exact match — a substitution is never silent |
 
-- `404 Not Found` → `ProblemDetail` if `activityName` doesn't exist.
+- `404 Not Found` → `ProblemDetail` if `activityName` doesn't match closely enough to auto-resolve (issue #66) — the body carries ranked `suggestions`, not just the bare message. See [Fuzzy activity-name resolution](#fuzzy-activity-name-resolution-issue-66) below.
 
 #### `GET /activitylog/user/{id}`
 All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
@@ -147,6 +148,17 @@ with no override always tracks its category's current base. This also closes the
 activity created without a multiplier earned `0` XP forever, and makes a negative multiplier degrade
 to the category base instead of producing negative XP.
 
+### Fuzzy activity-name resolution (issue #66)
+
+Exact match still wins outright — a typo only costs anything on a **miss**. `activityRepository.findAll()`
+runs live on that miss path only (an admin-curated, tens-of-rows table; no startup index, so nothing
+goes stale when `POST /activity/` adds a row), scores every candidate's name/description/category
+against what was typed with a hand-written Jaro-Winkler matcher (`domain/ActivityMatcher.java`,
+`domain/LexicalActivityNameScorer.java`), and either substitutes a confident, unambiguous match against
+an **active** activity — reported back via `nameResolution`, never silently — or returns the ranked
+alternatives on the `404`. Full design, the worked "morning jog" example, and the three safety rails
+guarding the auto-resolve: [Fuzzy Activity-Name Matching](../docs/features/fuzzy-activity-matching.md).
+
 **`outbox_event`** — Transactional Outbox table (new in #16):
 | Column | Type | Notes |
 |--------|------|-------|
@@ -176,6 +188,11 @@ Full design + code walkthrough: [`EVENT_DRIVEN_DECOUPLING.md`](../docs/features/
 
 Standard env vars (root [`.env.example`](../.env.example)): `SPRING_DATASOURCE_URL/USERNAME/PASSWORD`, `SPRING_JPA_HIBERNATE_DDL_AUTO=update`, `server.port=8081`, `eureka.client.service-url.defaultZone`, `SPRING_RABBITMQ_HOST/PORT/USERNAME/PASSWORD`, `outbox.relay.delay-ms` (default `2000`).
 
+Fuzzy activity-name resolution (issue #66): `ACTIVITY_NAME_AUTO_RESOLVE_ENABLED` (default `true` —
+kill switch for the automatic substitution only; suggestions are unaffected), `ACTIVITY_NAME_AUTO_RESOLVE_THRESHOLD`
+(default `0.86`), `ACTIVITY_NAME_AMBIGUITY_MARGIN` (default `0.05`), `ACTIVITY_NAME_SUGGESTION_THRESHOLD`
+(default `0.45`), `ACTIVITY_NAME_MAX_SUGGESTIONS` (default `3`).
+
 ## Inter-service dependencies
 
 - **Publishes to:** RabbitMQ (`com.tracker.contracts.event.ActivityLoggedEvent`, exchange `activity.events`) — consumed by gamification-service. No Feign client, no synchronous HTTP call to any other service.
@@ -200,7 +217,13 @@ Includes `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (`Activ
 
 ## Troubleshooting
 
-- **`activityName` not found → 404** — the activity must be created via `POST /activity/` first.
+- **`activityName` not found → 404 with `suggestions`** (issue #66) — the response carries ranked
+  alternatives now, not just a bare message; if the top match was close enough, unambiguous, and
+  active, it's substituted automatically instead (`nameResolution` on a `200`). If suggestions look
+  wrong, check the target activity's `description` — matching is lexical, not semantic, so suggestion
+  quality tracks catalog-metadata quality (see [Fuzzy activity-name resolution](#fuzzy-activity-name-resolution-issue-66)
+  above). If a typo still 404s with **no** suggestions at all, the activity must be created via
+  `POST /activity/` first — nothing in the catalog was close enough to guess from.
 - **`400` on `POST /activitylog/`** — the `userId` header is required; a request without it is rejected before the service layer runs. The Gateway supplies it automatically; a direct call to `:8081` must set it manually.
 - **XP never shows up on gamification-service** — check the RabbitMQ management UI (`http://localhost:15672`, guest/guest) for a stuck/DLQ'd message, and confirm `outbox_event.published_at` is actually getting stamped (the `OutboxRelay` polls every `outbox.relay.delay-ms`, default 2s).
 - **Health check:** `curl http://localhost:8081/actuator/health` — `spring-boot-starter-actuator` is wired (exposes `health`, `info`; Docker healthcheck depends on this).

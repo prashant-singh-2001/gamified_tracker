@@ -119,3 +119,17 @@ session-integrity:
   absolute-flag-minutes: ${SESSION_INTEGRITY_ABSOLUTE_FLAG_MINUTES:600}
   # A day physically contains 1440 minutes; closes aggregate farming via many small sessions.
   max-daily-minutes: ${SESSION_INTEGRITY_MAX_DAILY_MINUTES:1440}
+
+# Fuzzy activity-name resolution (issue #66). auto-resolve-enabled is a kill switch for the
+# automatic substitution ONLY -- ranked suggestions on a 404 are unaffected by it.
+activity-name-matching:
+  auto-resolve-enabled: ${ACTIVITY_NAME_AUTO_RESOLVE_ENABLED:true}
+  # Just above the 0.85 record-linkage convention for "high-confidence Jaro-Winkler", and above
+  # ActivityMatcher.DESCRIPTION_WEIGHT (0.8) -- so a description hit structurally CANNOT
+  # auto-resolve, only a name hit can.
+  auto-resolve-threshold: ${ACTIVITY_NAME_AUTO_RESOLVE_THRESHOLD:0.86}
+  # Two catalog names one edit apart land ~0.03 apart ("Studyng" -> Study 0.943, Studying 0.975);
+  # 0.05 catches that band and refuses to guess.
+  ambiguity-margin: ${ACTIVITY_NAME_AMBIGUITY_MARGIN:0.05}
+  suggestion-threshold: ${ACTIVITY_NAME_SUGGESTION_THRESHOLD:0.45}
+  max-suggestions: ${ACTIVITY_NAME_MAX_SUGGESTIONS:3}
