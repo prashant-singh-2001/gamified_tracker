@@ -84,6 +84,29 @@ services:
       retries: 5
       start_period: 5s
 
+  # AI weekly coaching digest (issue #65), Ollama backend. profiles: keeps this OUT of a plain
+  # `docker compose up` and out of CI's `docker compose up -d` -- insights.enabled defaults to
+  # false anyway, but this also means the health gate never waits on a multi-GB model pull.
+  #   docker compose --profile insights up -d
+  #   docker compose exec ollama ollama pull llama3.2
+  ollama:
+    image: ollama/ollama:latest
+    container_name: tracker-ollama
+    restart: always
+    profiles: ["insights"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      # ollama/ollama is Ubuntu-based with no guaranteed wget/curl, so probe via the CLI itself
+      # rather than the Java services' `wget --spider` idiom.
+      test: [ "CMD-SHELL", "ollama list || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
   zipkin:
     image: openzipkin/zipkin:latest
     container_name: tracker-zipkin
@@ -221,3 +244,4 @@ services:
 volumes:
   postgres_data:
   grafana-data:
+  ollama-data:

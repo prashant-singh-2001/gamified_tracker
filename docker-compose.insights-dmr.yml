@@ -1,0 +1,26 @@
+# Docker Model Runner backend for the AI weekly coaching digest (issue #65) -- an alternative to
+# the Ollama profile in docker-compose.yml, for anyone who already has Docker Desktop's Model
+# Runner and would rather not run a second container.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.insights-dmr.yml up -d
+#
+# Kept OUT of docker-compose.yml deliberately: the top-level `models:` element needs Compose 2.38+,
+# and an unrecognised top-level key would break EVERY compose command on an older Compose --
+# including the `up -d` that CI's health gate depends on. A separate file means the main stack
+# cannot regress on that. Docker Model Runner is also a Docker Desktop feature, not guaranteed on
+# a Linux CI runner, which is a second reason this never becomes part of the default stack.
+models:
+  digest_model:
+    model: ai/gemma3
+
+services:
+  activity:
+    models:
+      digest_model:
+        # Compose injects the running model's OpenAI-compatible URL into this env var -- confirm it
+        # includes the /engines/v1 suffix Spring AI expects (spring.ai.openai.base-url); if it
+        # doesn't, set INSIGHTS_OPENAI_BASE_URL explicitly in .env instead of relying on this.
+        endpoint_var: INSIGHTS_OPENAI_BASE_URL
+    environment:
+      - INSIGHTS_ENABLED=true
+      - INSIGHTS_CHAT_PROVIDER=openai
