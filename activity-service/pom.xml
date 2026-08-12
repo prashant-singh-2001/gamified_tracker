@@ -27,6 +27,20 @@
         <url/>
     </scm>
 
+    <!-- Spring AI BOM: only activity-service uses it, so this stays local rather than moving to the
+         parent's dependencyManagement. 1.1.x is the line that supports Boot 3.5; 2.0.x needs Boot 4. -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>1.1.8</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -99,6 +113,18 @@
             <groupId>com.tracker</groupId>
             <artifactId>contracts</artifactId>
             <version>${project.version}</version>
+        </dependency>
+
+        <!-- AI weekly digest (issue #65). Two interchangeable local backends, picked by
+             spring.ai.model.chat at runtime; both starters ship, neither is active by default.
+             openai = any OpenAI-compatible server: Docker Model Runner, vLLM, LocalAI, llama.cpp. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
 
     </dependencies>
