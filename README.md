@@ -126,6 +126,7 @@ See **[API.md](API.md)** for the full endpoint reference — the Gateway also ro
 
 ## Documentation
 
+- **[docs/FLOWS.md](docs/FLOWS.md)** — a step-by-step ordering map of every request/event/timer flow in the system, from container bring-up through logging an activity to async XP award, review, and CI — the "what happens, in what order" view across services
 - **[API.md](API.md)** — all REST endpoints and their request/response shapes
 - **[docs/features/](docs/features/)** — deep-dives into the notable engineering work (JWT/IDOR, rate limiting, event-driven decoupling, concurrency-safe XP, and more), each with a diagram and the load-bearing code
 - **[postman/](postman/)** — a ready-to-import Postman collection covering every endpoint, including a dedicated IDOR-verification folder

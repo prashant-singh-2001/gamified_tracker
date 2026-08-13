@@ -6,6 +6,10 @@ load-bearing code), its config, and a way to try it live. Verified against the c
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
 territory.
 
+Looking for how these features fit together into an actual request or event, in order? See
+**[../FLOWS.md](../FLOWS.md)** — a step-by-step ordering map (platform bring-up through async XP
+award to CI) that links back to the relevant deep-dive below for the *why* behind each step.
+
 ## Security & Edge
 
 | Doc | What it demonstrates |
@@ -14,6 +18,7 @@ territory.
 | [Rate Limiting](rate-limiting.md) | Redis-backed Bucket4j on the Server MVC gateway (not the reactive `RequestRateLimiter`) — two independent throttles for two different reasons |
 | [API Gateway Routing](api-gateway-routing.md) | Java-DSL declarative routing, `lb://` load balancing, and why routes moved out of YAML |
 | [Session Integrity](session-integrity.md) | A from-scratch Iglewicz-Hoaglin outlier detector with three fallback tiers, an absolute threshold and daily cap closing a self-consistency gap the statistics alone couldn't catch, and a quarantine-not-reject admin review workflow |
+| [Refresh Token Rotation](refresh-token.md) | Single-use refresh tokens with atomic used-check-and-mark, and reuse detection that revokes every outstanding token for the user, not just the replayed one |
 
 ## Event-Driven Core
 
@@ -60,6 +65,7 @@ territory.
 | Feature | Service(s) | Entry point to read first |
 |---|---|---|
 | Auth & identity propagation | api-gateway | `security/SecurityConfig.java`, `security/UserIdHeaderFilter.java` |
+| Refresh token rotation | api-gateway | `auth/RefreshTokenService.java`, `auth/RefreshTokenRevocationService.java` |
 | Rate limiting | api-gateway | `config/RateLimitConfig.java` |
 | Gateway routing | api-gateway | `config/RouteConfiguration.java` |
 | Session integrity | activity-service | `domain/DurationOutlierDetector.java`, `service/DurationOutlierEvaluationService.java` |
