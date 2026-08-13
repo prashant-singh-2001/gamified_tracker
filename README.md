@@ -57,6 +57,19 @@ docker-compose up --build
 
 That's it — all services, Eureka, Config Server, PostgreSQL, RabbitMQ, Redis, Prometheus, Grafana, and Zipkin start together.
 
+The [AI weekly coaching digest](docs/features/ai-weekly-digest.md) is opt-in and needs one extra
+command — neither of its two backends starts with a plain `docker compose up`:
+
+```bash
+# Local Ollama container
+docker compose --profile insights up -d
+docker compose exec ollama ollama pull llama3.2
+# then set INSIGHTS_ENABLED=true and INSIGHTS_CHAT_PROVIDER=ollama in .env and restart activity-service
+
+# — or — Docker Model Runner (Docker Desktop's built-in local inference)
+docker compose -f docker-compose.yml -f docker-compose.insights-dmr.yml up -d
+```
+
 ## Ports
 
 | Service              | Port |

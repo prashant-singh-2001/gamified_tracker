@@ -1,6 +1,6 @@
 # Feature Docs — Gamified Tracker
 
-Seventeen standalone deep-dives into the notable engineering work in this codebase — each one covers
+Twenty standalone deep-dives into the notable engineering work in this codebase — each one covers
 what the feature is, why it's worth a second look, how it actually works (with a diagram and the
 load-bearing code), its config, and a way to try it live. Verified against the current source at
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
@@ -37,6 +37,7 @@ territory.
 | [Achievement Badges](achievement-badges.md) | A criteria-driven rules engine (one `switch`, four badge kinds, all data-defined) reusing the codebase's idempotent-upsert grant pattern — and an honest gap: implemented, tested, not yet wired to a trigger |
 | [Streaks](streaks.md) | A consecutive-day gap-state-machine multiplier that stacks onto XP, entirely inside the producing service — the consuming service needed zero changes |
 | [Analytics](analytics.md) | In-memory stream aggregation over raw activity logs (category summaries, a zero-filled daily XP timeline, a single-query weekly report) — deliberately sidesteps this repo's H2/Postgres SQL-portability trap |
+| [AI Weekly Coaching Digest](ai-weekly-digest.md) | A provider-agnostic `ChatModel` narrator over numbers computed entirely in Java, interchangeable between a local Ollama container and Docker Model Runner with zero code change, always-200 with a `narrativeStatus` field so "off" and "the model failed" never need a second response shape |
 
 ## Cross-Cutting & Quality
 
@@ -70,6 +71,7 @@ territory.
 | Achievement badges | gamification-service | `service/impl/AchievementServiceImpl.java` |
 | Streaks | activity-service | `service/impl/ActivityLogServiceImpl.java` (`applyStreak`) |
 | Analytics | activity-service | `service/impl/AnalyticsServiceImpl.java` |
+| AI weekly coaching digest | activity-service | `service/impl/InsightsServiceImpl.java`, `domain/WeeklyDigestNarrator.java`, `domain/ChatModelWeeklyDigestNarrator.java` |
 | Fuzzy activity-name matching | activity-service | `domain/ActivityMatcher.java`, `domain/ActivityNameScorer.java`, `service/ActivityNameResolutionService.java` |
 | Error handling | all three web services | `exception/GlobalExceptionHandler.java` |
 | Testing strategy | all six modules | `*/src/test/...` |

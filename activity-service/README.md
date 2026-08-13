@@ -108,6 +108,23 @@ All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 
 > `GET /activitylog/{id}` and `GET /activitylog/user/{id}` always return `bonusApplied: false`, `bonusMultiplier: 1.0`, `leveledUp: false` — `bonusApplied`/`bonusMultiplier` aren't persisted columns, only computed in-memory on the `POST` that created the log; `leveledUp` is `false` everywhere now, including on the `POST` response itself (see above).
 
+### Insights — `/insights`
+
+#### `GET /insights/weekly`
+AI-generated weekly coaching digest (issue #65 — see [AI weekly coaching digest](#ai-weekly-coaching-digest-issue-65) below). Reads `userId` from the `userId` request header, same trust boundary as `POST /activitylog/` above.
+
+Response `200 OK` — `WeeklyInsightsResponse`:
+| Field | Type | Notes |
+|-------|------|-------|
+| `weekStart` / `weekEnd` | ISO-8601 date | the same rolling 7-day window as `/activitylog/analytics/.../weekly-report` |
+| `totals` | object | a `WeeklyReportResponse`, delegated from `AnalyticsService.getWeeklyReport()` — never recomputed |
+| `categories` | array | per-category totals **for the week** (`category`, `totalDurationMinutes`, `totalXpEarned`, `totalSessions`) — unlike the all-time `category-summary` endpoint above |
+| `narrative` | String \| null | an AI-written coaching summary, or `null` if unavailable |
+| `narrativeStatus` | enum | `GENERATED` \| `DISABLED` \| `UNAVAILABLE` — always present, so a client never needs to special-case a missing field or a different status code |
+
+**Always `200`.** Numbers are always computed and returned regardless of `insights.enabled` or
+backend health; only `narrative` depends on a live model.
+
 ## Data model
 
 **`activity`**:
@@ -159,6 +176,19 @@ an **active** activity — reported back via `nameResolution`, never silently �
 alternatives on the `404`. Full design, the worked "morning jog" example, and the three safety rails
 guarding the auto-resolve: [Fuzzy Activity-Name Matching](../docs/features/fuzzy-activity-matching.md).
 
+### AI weekly coaching digest (issue #65)
+
+`GET /insights/weekly` computes every number in Java — headline totals delegated to
+`AnalyticsService.getWeeklyReport()`, a per-category-for-the-week breakdown mirrored from
+`getCategorySummary()`'s grouping idiom — and hands them, plus that week's notes, to a
+`WeeklyDigestNarrator` for a short coaching narrative. `ChatModelWeeklyDigestNarrator` is the one
+implementation, built on Spring AI's `ChatModel` abstraction; a local Ollama container and Docker
+Model Runner both resolve to a `ChatModel` bean, so switching backend is pure configuration
+(`spring.ai.model.chat`), never a code change. Off by default (`insights.enabled=false`), and always
+`200` regardless of flag state or model health — see [AI Weekly Coaching
+Digest](../docs/features/ai-weekly-digest.md) for the full design, the prompt-hardening rules that
+treat every note as untrusted data, and how to run either backend locally.
+
 **`outbox_event`** — Transactional Outbox table (new in #16):
 | Column | Type | Notes |
 |--------|------|-------|
@@ -192,6 +222,15 @@ Fuzzy activity-name resolution (issue #66): `ACTIVITY_NAME_AUTO_RESOLVE_ENABLED`
 kill switch for the automatic substitution only; suggestions are unaffected), `ACTIVITY_NAME_AUTO_RESOLVE_THRESHOLD`
 (default `0.86`), `ACTIVITY_NAME_AMBIGUITY_MARGIN` (default `0.05`), `ACTIVITY_NAME_SUGGESTION_THRESHOLD`
 (default `0.45`), `ACTIVITY_NAME_MAX_SUGGESTIONS` (default `3`).
+
+AI weekly coaching digest (issue #65): `INSIGHTS_ENABLED` (default `false` — the whole-feature
+switch), `INSIGHTS_CHAT_PROVIDER` (default `none` — Spring AI's own `spring.ai.model.chat` selector;
+the actual backend switch, `none`/`ollama`/`openai`), `INSIGHTS_MAX_NOTES` (default `20`),
+`INSIGHTS_MAX_NOTE_CHARS` (default `280`), `INSIGHTS_MAX_NARRATIVE_CHARS` (default `1200`). Ollama
+backend: `OLLAMA_BASE_URL` (default `http://localhost:11434`), `OLLAMA_MODEL` (default `llama3.2`).
+Docker Model Runner / other OpenAI-compatible backend: `INSIGHTS_OPENAI_BASE_URL` (default
+`http://localhost:12434/engines/v1`), `INSIGHTS_OPENAI_API_KEY` (default `not-needed` — required by
+the Spring AI starter, ignored by a local server), `INSIGHTS_OPENAI_MODEL` (default `ai/gemma3`).
 
 ## Inter-service dependencies
 
@@ -227,7 +266,13 @@ Includes `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (`Activ
 - **`400` on `POST /activitylog/`** — the `userId` header is required; a request without it is rejected before the service layer runs. The Gateway supplies it automatically; a direct call to `:8081` must set it manually.
 - **XP never shows up on gamification-service** — check the RabbitMQ management UI (`http://localhost:15672`, guest/guest) for a stuck/DLQ'd message, and confirm `outbox_event.published_at` is actually getting stamped (the `OutboxRelay` polls every `outbox.relay.delay-ms`, default 2s).
 - **Health check:** `curl http://localhost:8081/actuator/health` — `spring-boot-starter-actuator` is wired (exposes `health`, `info`; Docker healthcheck depends on this).
+- **`GET /insights/weekly` always returns `narrative: null`** — check, in order: `INSIGHTS_ENABLED=true`?
+  then `INSIGHTS_CHAT_PROVIDER` set to `ollama` or `openai` (not the default `none`)? then is the
+  backend actually reachable (`docker compose --profile insights up -d` for Ollama, or the
+  `docker-compose.insights-dmr.yml` override for Docker Model Runner) and does it have a model pulled?
+  `narrativeStatus` on the response tells you which of these it is (`DISABLED` vs `UNAVAILABLE`)
+  without needing to check logs first.
 
 ## Related docs
 
-- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../docs/features/event-driven-decoupling.md)
+- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../docs/features/event-driven-decoupling.md) · [AI Weekly Coaching Digest](../docs/features/ai-weekly-digest.md)
