@@ -195,3 +195,12 @@ insights:
   max-notes: ${INSIGHTS_MAX_NOTES:20}
   max-note-chars: ${INSIGHTS_MAX_NOTE_CHARS:280}
   max-narrative-chars: ${INSIGHTS_MAX_NARRATIVE_CHARS:1200}
+
+# Natural-language activity logging (issue #70). Default OFF, same reasoning as insights.enabled
+# above -- CI has no model server and no secrets. When off (or the backend can't parse the text),
+# POST /activitylog/natural returns status=DISABLED/UNAVAILABLE and writes nothing; it never logs an
+# activity on its own regardless of this flag. Backend selection is the same spring.ai.model.chat
+# selector insights uses, at the top of this file -- one selector for every AI-backed feature.
+natural-log:
+  enabled: ${NATURAL_LOG_ENABLED:false}
+  max-input-chars: ${NATURAL_LOG_MAX_INPUT_CHARS:500}
