@@ -58,4 +58,33 @@ class ActivityLogRequestValidationTest {
 
         assertTrue(violations.isEmpty());
     }
+
+    // Issue #70's stated blocker ("startTime is @FutureOrPresent, so 'this morning' is
+    // unloggable") does not hold against the current code -- this pins that startTime is
+    // @PastOrPresent, same as endTime above, so a regression here is caught immediately rather
+    // than resurfacing as a confusing failure deep in natural-language logging.
+    @Test
+    @DisplayName("startTime in the future fails validation")
+    void futureStartTime_isRejected() {
+        LocalDateTime now = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest(
+                "Study", now.plusHours(1), now.plusHours(2), "notes", now);
+
+        Set<ConstraintViolation<ActivityLogRequest>> violations = validator.validate(request);
+
+        assertFalse(violations.isEmpty());
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("startTime")));
+    }
+
+    @Test
+    @DisplayName("startTime in the past or present passes validation")
+    void pastOrPresentStartTime_isAccepted() {
+        LocalDateTime now = LocalDateTime.now();
+        ActivityLogRequest request = new ActivityLogRequest(
+                "Study", now.minusHours(2), now.minusHours(1), "notes", now);
+
+        Set<ConstraintViolation<ActivityLogRequest>> violations = validator.validate(request);
+
+        assertTrue(violations.isEmpty());
+    }
 }
