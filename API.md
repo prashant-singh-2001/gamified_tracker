@@ -200,6 +200,29 @@ Records an activity session and computes XP (with a chance of a bonus roll). Req
 
 ---
 
+#### `POST /api/activitylog/natural`
+Issue #70. Turns one free-text sentence ("studied Spring Boot for 90 minutes this morning") into a **preview** draft of the request above — **writes nothing**. Requires auth; `userId` comes from the trusted header, same as `POST /api/activitylog` (there's no per-user data to look up today, but the endpoint stays consistent with the rest of this controller rather than becoming the one path-variable exception). The client commits by `POST`ing the returned `draft` to `POST /api/activitylog` above, unchanged.
+
+**The model classifies, Java computes** — same principle as the [AI Weekly Coaching Digest](docs/features/ai-weekly-digest.md)'s "the model narrates, it never computes": the LLM never emits a timestamp, only relative components (`dayOffset`, an optional clock time or a coarse time-of-day bucket, a stated duration). A pure Java class turns those into concrete times against a real clock, guaranteeing they can never land in the future.
+
+**Request body:**
+| Field | Type | Notes |
+|---|---|---|
+| `text` | String | required — one free-text sentence describing something already done |
+
+**Response:** `200 OK`, always — same always-200-plus-status contract as `GET /api/insights/weekly`:
+| Field | Type | Notes |
+|---|---|---|
+| `draft` | object \| null | an `ActivityLogRequest` (same shape as `POST /api/activitylog`'s body) — non-null only when `status` is `PARSED`. `activityName` is left as the raw text the model produced, **not** pre-resolved onto a catalog entry — see `nameResolution` below |
+| `interpretation` | string \| null | a short human-readable restatement of what was understood (`PARSED`) or why nothing could be committed (`NEEDS_CLARIFICATION`); `null` for `DISABLED`/`UNAVAILABLE` |
+| `status` | String enum | `PARSED` (draft is ready to commit), `NEEDS_CLARIFICATION` (the model answered, but no duration was stated, the duration was over the session-integrity cap, or the sentence described something upcoming — never a guessed or silently-clamped value), `DISABLED` (feature flag off), `UNAVAILABLE` (flag on, backend failed or timed out) |
+| `nameResolution` | object \| null | (#66) a **preview** of what `activityName` would resolve to on commit, `{ requestedName, resolvedName, score }` — populated the same way `POST /api/activitylog`'s 200 response populates it, without rewriting `draft.activityName` |
+| `suggestions` | array | ranked alternatives when nothing resolved confidently enough for `nameResolution` — same shape as the `404` on `POST /api/activitylog` |
+
+Has its own `natural-log.enabled` feature flag, but shares the same `spring.ai.model.chat` backend selector as the AI Weekly Coaching Digest — no separate backend to run. See [Natural-Language Activity Logging](docs/features/natural-language-logging.md).
+
+---
+
 #### `GET /api/activitylog/user/{id}`
 List all activity logs for a user. Requires auth. **Open read by design** — `{id}` can be any user, not just the caller (see note above).
 
@@ -366,6 +389,9 @@ Create an activity log (computes duration + XP bonus, saves the log, and writes 
 
 #### `GET /activitylog/user/{id}`
 List all activity logs for a user.
+
+#### `POST /activitylog/natural`
+Issue #70. Parses one free-text sentence into a draft `ActivityLogRequest` — **writes nothing**, same request/response shape as the Gateway's `POST /api/activitylog/natural`. Reads `userId` from the `userId` request header (required), same trust-boundary caveat as `POST /activitylog/` above when called directly against `:8081`.
 
 ### Analytics
 
