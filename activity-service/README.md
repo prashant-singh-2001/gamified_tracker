@@ -108,6 +108,23 @@ All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
 
 > `GET /activitylog/{id}` and `GET /activitylog/user/{id}` always return `bonusApplied: false`, `bonusMultiplier: 1.0`, `leveledUp: false` — `bonusApplied`/`bonusMultiplier` aren't persisted columns, only computed in-memory on the `POST` that created the log; `leveledUp` is `false` everywhere now, including on the `POST` response itself (see above).
 
+#### `POST /activitylog/natural`
+Turns one free-text sentence into a preview draft of the `POST /activitylog/` request above (issue #70 — see [Natural-language activity logging](#natural-language-activity-logging-issue-70) below). **Writes nothing.** Same `userId` header requirement/trust boundary as `POST /activitylog/` above.
+
+Request:
+| Field | Type | Notes |
+|-------|------|-------|
+| `text` | String | required — one free-text sentence describing something already done |
+
+Response `200 OK` — `NaturalLogDraftResponse`:
+| Field | Type | Notes |
+|-------|------|-------|
+| `draft` | object \| null | an `ActivityLogRequest`, non-null only when `status` is `PARSED`. `activityName` is the raw text extracted, **not** pre-resolved — see `nameResolution` |
+| `interpretation` | String \| null | human-readable restatement of what was understood, or why not; `null` for `DISABLED`/`UNAVAILABLE` |
+| `status` | enum | `PARSED` \| `NEEDS_CLARIFICATION` \| `DISABLED` \| `UNAVAILABLE` |
+| `nameResolution` | object \| null | preview only (issue #66) — same shape as above, does not rewrite `draft.activityName` |
+| `suggestions` | array | ranked alternatives, same shape as the `404` on `POST /activitylog/` |
+
 ### Insights — `/insights`
 
 #### `GET /insights/weekly`
@@ -189,6 +206,22 @@ Model Runner both resolve to a `ChatModel` bean, so switching backend is pure co
 Digest](../docs/features/ai-weekly-digest.md) for the full design, the prompt-hardening rules that
 treat every note as untrusted data, and how to run either backend locally.
 
+### Natural-language activity logging (issue #70)
+
+`POST /activitylog/natural` lets a model classify a free-text sentence ("studied Spring Boot for 90
+minutes this morning") instead of a client filling in a form — but the model never sees or emits a
+timestamp; `ParsedLogIntent`, its entire output contract, has no field capable of holding one. A
+pure, `Clock`-driven `LogIntentResolver` turns a day offset, an optional clock time or coarse
+time-of-day bucket, and a stated duration into concrete times, guaranteeing they can never land in
+the future. Missing or over-cap durations, and anything dated in the future, are refused outright —
+never guessed, never silently clamped. The endpoint writes nothing: it returns a draft
+`ActivityLogRequest` the client `POST`s to `/activitylog/` above to actually commit it, the same
+draft-then-commit posture #67's quarantine takes with a flagged log. Off by default
+(`natural-log.enabled=false`), shares the same `spring.ai.model.chat` backend as the AI weekly
+digest above — see [Natural-Language Activity
+Logging](../docs/features/natural-language-logging.md) for the full design and why the stated
+`@FutureOrPresent` blocker in the original issue no longer applied by the time this was built.
+
 **`outbox_event`** — Transactional Outbox table (new in #16):
 | Column | Type | Notes |
 |--------|------|-------|
@@ -232,6 +265,10 @@ Docker Model Runner / other OpenAI-compatible backend: `INSIGHTS_OPENAI_BASE_URL
 `http://localhost:12434/engines/v1`), `INSIGHTS_OPENAI_API_KEY` (default `not-needed` — required by
 the Spring AI starter, ignored by a local server), `INSIGHTS_OPENAI_MODEL` (default `ai/gemma3`).
 
+Natural-language activity logging (issue #70): `NATURAL_LOG_ENABLED` (default `false` — the
+whole-feature switch), `NATURAL_LOG_MAX_INPUT_CHARS` (default `500`). No separate backend
+selector/vars — reuses `INSIGHTS_CHAT_PROVIDER`/`OLLAMA_*`/`INSIGHTS_OPENAI_*` above.
+
 ## Inter-service dependencies
 
 - **Publishes to:** RabbitMQ (`com.tracker.contracts.event.ActivityLoggedEvent`, exchange `activity.events`) — consumed by gamification-service. No Feign client, no synchronous HTTP call to any other service.
@@ -272,7 +309,12 @@ Includes `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (`Activ
   `docker-compose.insights-dmr.yml` override for Docker Model Runner) and does it have a model pulled?
   `narrativeStatus` on the response tells you which of these it is (`DISABLED` vs `UNAVAILABLE`)
   without needing to check logs first.
+- **`POST /activitylog/natural` always returns `status: DISABLED`/`draft: null`** — same checklist as
+  above: `NATURAL_LOG_ENABLED=true`? then `INSIGHTS_CHAT_PROVIDER` set to `ollama`/`openai`? then is
+  the backend actually reachable and has a model pulled? `status: NEEDS_CLARIFICATION` instead means
+  the backend answered but the sentence didn't state a duration, stated one over
+  `session-integrity.max-duration-minutes`, or described something upcoming — not a config problem.
 
 ## Related docs
 
-- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../docs/features/event-driven-decoupling.md) · [AI Weekly Coaching Digest](../docs/features/ai-weekly-digest.md)
+- [Root README](../README.md) · [API.md](../API.md) · [gamification-service README](../gamification-service/README.md) · [EVENT_DRIVEN_DECOUPLING.md](../docs/features/event-driven-decoupling.md) · [AI Weekly Coaching Digest](../docs/features/ai-weekly-digest.md) · [Natural-Language Activity Logging](../docs/features/natural-language-logging.md)

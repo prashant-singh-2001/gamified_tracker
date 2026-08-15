@@ -271,6 +271,26 @@ flowchart TD
 [Event-Driven Decoupling](features/event-driven-decoupling.md) (why the outbox write is atomic
 with the log write).
 
+### Natural-language draft (issue #70) — writes nothing
+
+A second, non-writing front door onto the flow above: `POST /activitylog/natural` →
+`ActivityLogController.parseNaturalLog` (`ActivityLogController.java:41-45`) →
+`NaturalLogServiceImpl.parseNaturalLog` (`NaturalLogServiceImpl.java:43-86`). Turns one free-text
+sentence ("studied Spring Boot for 90 minutes this morning") into a **preview** of the request
+above — it never calls `addActivityLogResponseResponseEntity` and never writes an `activity_log`
+row. The client commits by `POST`ing the returned draft to `POST /activitylog/` itself, rejoining
+step 1 above from scratch.
+
+| # | Step | Source | Can stop here? |
+|---|---|---|---|
+| 1 | `naturalLanguageLogParser.parse(text)` — an LLM turns the sentence into a `ParsedLogIntent` with **no timestamp field at all** (structurally impossible for the model to emit one); wrapped in `try/catch(Exception)` | `NaturalLogServiceImpl.java:45-51`, `ChatModelNaturalLanguageLogParser.java` | throws, or an empty result with the flag off → `DISABLED`/`UNAVAILABLE`, `200`, nothing written |
+| 2 | `LogIntentResolver.resolve(intent)` — pure Java, `Clock`-driven: rejects a future day, a missing/non-positive duration, or a duration over `session-integrity.max-duration-minutes` (the same cap step 6 above enforces on commit) | `NaturalLogServiceImpl.java:58`, `LogIntentResolver.java:36-84` | rejected → `NEEDS_CLARIFICATION`, `200`, `draft: null` — **never a guessed duration, never silently clamped** |
+| 3 | A stated time that would land in the future is shifted back so it ends now, duration preserved | `LogIntentResolver.java:67-73` | never blocks — the one invariant this class guarantees is that a resolved draft's times can never land in the future |
+| 4 | Name-resolution **preview** only: exact match via `ActivityRepository.findByName`, else `ActivityNameResolutionService.resolve` (#66) — populates `nameResolution`/`suggestions` for display, **`draft.activityName` is left untouched** | `NaturalLogServiceImpl.java:87-97` | never blocks — preview info, not a decision |
+| 5 | `200 OK` with the draft, an interpretation, and `status: PARSED` | `NaturalLogServiceImpl.java:76-85` | the draft is a plain `ActivityLogRequest` — committing it replays the whole flow above from step 1, including its own real (non-preview) exact-then-fuzzy resolution |
+
+→ Deep dive: [Natural-Language Activity Logging](features/natural-language-logging.md).
+
 ---
 
 ## Part VI — XP award & progression (async)
