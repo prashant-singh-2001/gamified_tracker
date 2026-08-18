@@ -284,6 +284,19 @@ design writeup, including the in-memory-aggregation trade-off and known gaps.
 
 ---
 
+### Insights
+
+AI-generated weekly coaching digest (issue #65), routed via the same `/api/insights/**` addition to
+the Activity Log route bean — no new rate-limit bucket. See [AI Weekly Coaching
+Digest](docs/features/ai-weekly-digest.md) for the full design, including the always-`200` contract
+and the two interchangeable local model backends.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/insights/weekly` | authenticated | `weekStart`, `weekEnd`, `totals` (same shape as the weekly-report above, delegated — never recomputed), `categories` (per-category totals **for the week**, unlike the all-time `category-summary` above), `narrative` (`string \| null`), `narrativeStatus` (`GENERATED` \| `DISABLED` \| `UNAVAILABLE` — always present, so the client never needs a second response shape or a non-200 status to tell "off" from "the model failed"). `userId` comes from the trusted JWT-derived header, never a path segment — this response is built from the caller's own private notes |
+
+---
+
 ### Notifications
 
 Surfaces level-up events (`LevelUpEvent`) as a caller-scoped feed. Full detail in
@@ -364,6 +377,18 @@ Calculates daily XP earned and total active minutes for the specified window (de
 
 #### `GET /activitylog/analytics/user/{userId}/weekly-report`
 Generates a comprehensive weekly report comparing current week vs previous week XP, percentage change, total active minutes, top category, and a 7-day daily breakdown.
+
+### AI Weekly Coaching Digest
+
+#### `GET /insights/weekly`
+Reads `userId` from the trusted request header (see `POST /activitylog/` above for the same
+trust-boundary caveat when called directly against `:8081`). Delegates the headline totals to
+`AnalyticsService.getWeeklyReport()`, computes a per-category-**for-the-week** breakdown that doesn't
+exist anywhere else, and — if `insights.enabled=true` and a model backend is configured — asks a
+local Ollama or Docker Model Runner instance to narrate those numbers. Always `200`: a disabled
+feature, an unconfigured backend, and a live model timeout all return the same shape with
+`narrative: null` and a `narrativeStatus` explaining why. Full design: [AI Weekly Coaching
+Digest](docs/features/ai-weekly-digest.md).
 
 #### `GET /activitylog/review/flagged`
 #### `POST /activitylog/review/{id}/approve`

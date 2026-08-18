@@ -21,7 +21,10 @@ public class RouteConfiguration {
     @Bean
     public RouterFunction<ServerResponse> activityRoute(RateLimitProperties props) {
         var b = props.activity();
-        return route("activity").route(path("/api/activity/**").or(path("/api/activitylog/**")), http())
+        // /api/insights/** rides this route (issue #65) rather than getting its own bean -- a new
+        // bean would need its own RateLimitProperties.Bucket + YAML + .env.example vars or it NPEs
+        // at startup, and the feature doesn't need a separate throttle from activity/activitylog.
+        return route("activity").route(path("/api/activity/**").or(path("/api/activitylog/**")).or(path("/api/insights/**")), http())
                 .before(rewritePath("^/api/(activity|activitylog)/?$", "/$1/"))
                 .before(rewritePath("^/api/(.*)$", "/$1"))
                 .filter(lb("activity-service"))

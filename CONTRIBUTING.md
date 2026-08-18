@@ -91,6 +91,10 @@ The working pattern for this project is:
 - If a locally-run service needs to reach something in Docker (e.g.
   Zipkin, Prometheus scraping), use `host.docker.internal` in the relevant
   config rather than a container name.
+- The [AI weekly coaching digest](docs/features/ai-weekly-digest.md)'s two model backends are
+  opt-in and neither starts with a plain `docker compose up -d` — see that doc's "Choosing a
+  backend" section for the `--profile insights` (Ollama) and `-f docker-compose.insights-dmr.yml`
+  (Docker Model Runner) commands.
 
 ## Pull Request Expectations
 
@@ -137,8 +141,11 @@ Once the workflow completes successfully, the PR is ready for review and merge (
 Feature-level documentation lives under `docs/features/*.md`. When adding a
 new feature or materially changing an existing one, add or update a doc
 there following the existing format in that directory — this keeps feature
-behavior documented separately from the architectural notes in
-`DESIGN_PATTERNS.md`.
+behavior documented separately from the cross-feature architectural notes in
+[docs/FLOWS.md](docs/FLOWS.md), which maps how features connect (request/event
+ordering across services) rather than what any one of them does on its own.
+If your change reorders, adds, or removes a step in a flow that document
+already covers, update it alongside your feature doc.
 
 ## Code Style
 

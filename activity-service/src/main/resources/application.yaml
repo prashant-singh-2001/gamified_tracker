@@ -39,6 +39,57 @@ spring:
     schemas: activity
     default-schema: activity
 
+  # AI weekly coaching digest (issue #65).
+  # none | ollama | openai. `none` (default) creates NO chat model bean, so both starters stay
+  # inert -- this is what keeps ActivityServiceApplicationTests and the CI compose gate green.
+  # `openai` means any OpenAI-compatible server (Docker Model Runner, vLLM, LocalAI), not the
+  # hosted OpenAI API -- it is pointed at base-url below.
+  #
+  # ALL SIX must be listed, not just chat/embedding: the openai starter ships six independent
+  # autoconfigurations (chat, embedding, image, audio.speech, audio.transcription, moderation),
+  # each individually `matchIfMissing = true` -- confirmed by decompiling
+  # spring-ai-autoconfigure-model-openai-1.1.8.jar. Any one left unset activates targeting OpenAI
+  # and fails at context startup on a missing API key. Ollama's chat/embedding autoconfigs are
+  # ALSO matchIfMissing=true, so `chat` specifically must never be left unset while both starters
+  # are on the classpath: unset activates Ollama's AND OpenAI's chat autoconfiguration
+  # simultaneously (matchIfMissing bypasses the differing havingValue), a guaranteed
+  # NoUniqueBeanDefinitionException, not just an ambiguity.
+  ai:
+    model:
+      chat: ${INSIGHTS_CHAT_PROVIDER:none}
+      embedding: none
+      image: none
+      audio:
+        speech: none
+        transcription: none
+      moderation: none
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      init:
+        pull-model-strategy: never   # never contact the server at startup
+      chat:
+        model: ${OLLAMA_MODEL:llama3.2}
+        options:
+          temperature: ${INSIGHTS_TEMPERATURE:0.4}
+    openai:
+      # Docker Model Runner: http://localhost:12434/engines/v1 from the host,
+      # http://model-runner.docker.internal/engines/v1 from inside a container.
+      base-url: ${INSIGHTS_OPENAI_BASE_URL:http://localhost:12434/engines/v1}
+      # Required by the starter, ignored by a local server. Real value only if you ever point this
+      # at a hosted provider -- which CI must never need.
+      api-key: ${INSIGHTS_OPENAI_API_KEY:not-needed}
+      chat:
+        model: ${INSIGHTS_OPENAI_MODEL:ai/gemma3}
+        options:
+          temperature: ${INSIGHTS_TEMPERATURE:0.4}
+
+  # activity-service makes no other outbound HTTP call (Feign was removed in #16), so this bounds
+  # the model call specifically. Belt-and-braces -- the service catches everything regardless.
+  http:
+    client:
+      connect-timeout: ${INSIGHTS_CONNECT_TIMEOUT:2s}
+      read-timeout: ${INSIGHTS_READ_TIMEOUT:20s}
+
 server:
   port: 8081
 
@@ -133,3 +184,14 @@ activity-name-matching:
   ambiguity-margin: ${ACTIVITY_NAME_AMBIGUITY_MARGIN:0.05}
   suggestion-threshold: ${ACTIVITY_NAME_SUGGESTION_THRESHOLD:0.45}
   max-suggestions: ${ACTIVITY_NAME_MAX_SUGGESTIONS:3}
+
+# AI weekly coaching digest (issue #65). Default OFF and no model backend selected: CI has no model
+# server and no secrets, and the compose health gate must stay green. When off, /insights/weekly
+# still returns all the numbers -- only `narrative` goes null. The model narrates; every number is
+# computed in Java. (Backend selection itself lives under spring.ai.model.chat at the top of this
+# file, alongside the rest of the spring: block.)
+insights:
+  enabled: ${INSIGHTS_ENABLED:false}
+  max-notes: ${INSIGHTS_MAX_NOTES:20}
+  max-note-chars: ${INSIGHTS_MAX_NOTE_CHARS:280}
+  max-narrative-chars: ${INSIGHTS_MAX_NARRATIVE_CHARS:1200}

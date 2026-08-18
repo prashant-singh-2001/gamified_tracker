@@ -57,6 +57,19 @@ docker-compose up --build
 
 That's it — all services, Eureka, Config Server, PostgreSQL, RabbitMQ, Redis, Prometheus, Grafana, and Zipkin start together.
 
+The [AI weekly coaching digest](docs/features/ai-weekly-digest.md) is opt-in and needs one extra
+command — neither of its two backends starts with a plain `docker compose up`:
+
+```bash
+# Local Ollama container
+docker compose --profile insights up -d
+docker compose exec ollama ollama pull llama3.2
+# then set INSIGHTS_ENABLED=true and INSIGHTS_CHAT_PROVIDER=ollama in .env and restart activity-service
+
+# — or — Docker Model Runner (Docker Desktop's built-in local inference)
+docker compose -f docker-compose.yml -f docker-compose.insights-dmr.yml up -d
+```
+
 ## Ports
 
 | Service              | Port |
@@ -113,6 +126,7 @@ See **[API.md](API.md)** for the full endpoint reference — the Gateway also ro
 
 ## Documentation
 
+- **[docs/FLOWS.md](docs/FLOWS.md)** — a step-by-step ordering map of every request/event/timer flow in the system, from container bring-up through logging an activity to async XP award, review, and CI — the "what happens, in what order" view across services
 - **[API.md](API.md)** — all REST endpoints and their request/response shapes
 - **[docs/features/](docs/features/)** — deep-dives into the notable engineering work (JWT/IDOR, rate limiting, event-driven decoupling, concurrency-safe XP, and more), each with a diagram and the load-bearing code
 - **[postman/](postman/)** — a ready-to-import Postman collection covering every endpoint, including a dedicated IDOR-verification folder
