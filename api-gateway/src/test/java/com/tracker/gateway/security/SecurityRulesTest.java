@@ -98,6 +98,80 @@ class SecurityRulesTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void postThreshold_withUserToken_isForbidden() throws Exception {
+        // #81: threshold rows drive the leveling curve for every user.
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        mockMvc.perform(post("/api/threshold")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"activityId\":1,\"level\":2,\"xpRequired\":100}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void postThreshold_withAdminToken_isNotForbidden() throws Exception {
+        String token = jwtUtil.generateToken("admin@example.com", Role.ADMIN, 99L);
+
+        // Same downstream-routing caveat as postLevel_withAdminToken_isNotForbidden — no
+        // gamification-service instance is registered in this test context.
+        try {
+            MvcResult result = mockMvc.perform(post("/api/threshold")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"activityId\":1,\"level\":2,\"xpRequired\":100}"))
+                    .andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
+    // #81 regression guard: POST /threshold/activity is a READ (getActivityLevelThresholdById)
+    // that happens to use POST to carry a request body — it must stay open to any authenticated
+    // user, not be swept up by a broader "/api/threshold/**" matcher.
+    @Test
+    @DisplayName("POST /threshold/activity stays open to a plain USER — it's a read, not a write (#81)")
+    void postThresholdActivity_withUserToken_isNotForbidden() throws Exception {
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        try {
+            MvcResult result = mockMvc.perform(post("/api/threshold/activity")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"activityId\":1,\"level\":2,\"xpRequired\":100}"))
+                    .andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
+    @Test
+    void postRanksRecompute_withUserToken_isForbidden() throws Exception {
+        // #83: full rank recompute is an expensive maintenance operation, not a user action.
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        mockMvc.perform(post("/api/ranks/recompute")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void postRanksRecompute_withAdminToken_isNotForbidden() throws Exception {
+        String token = jwtUtil.generateToken("admin@example.com", Role.ADMIN, 99L);
+
+        try {
+            MvcResult result = mockMvc.perform(post("/api/ranks/recompute")
+                            .header("Authorization", "Bearer " + token))
+                    .andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
     // #95: before the fix, this chain's .anyRequest().authenticated() also governed the
     // container's internal ERROR dispatch to /error. On that dispatch the re-authenticating
     // filters are skipped, the context is anonymous, /error matched no permitAll entry, and
