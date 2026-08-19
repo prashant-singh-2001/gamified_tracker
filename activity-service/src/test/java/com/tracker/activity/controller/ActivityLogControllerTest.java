@@ -5,7 +5,11 @@ import com.tracker.activity.dao.Category;
 import com.tracker.activity.dao.ReviewStatus;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
+import com.tracker.activity.dto.DraftStatus;
+import com.tracker.activity.dto.NaturalLogDraftResponse;
+import com.tracker.activity.dto.NaturalLogRequest;
 import com.tracker.activity.service.ActivityLogService;
+import com.tracker.activity.service.NaturalLogService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,6 +23,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -27,6 +32,9 @@ public class ActivityLogControllerTest {
 
     @Mock
     private ActivityLogService activityLogService;
+
+    @Mock
+    private NaturalLogService naturalLogService;
 
     @InjectMocks
     private ActivityLogController activityLogController;
@@ -240,5 +248,28 @@ public class ActivityLogControllerTest {
         assertEquals(expectedResponse, actualResponse);
         assertNotNull(actualResponse.getBody());
         assertEquals(3, actualResponse.getBody().size());
+    }
+
+    @Test
+    @DisplayName("Test parseNaturalLog method (issue #70) -- a non-PARSED result carries a null draft and a non-null status")
+    void testParseNaturalLog() {
+        //Arrange
+        Long userId = 2L;
+        NaturalLogRequest request = new NaturalLogRequest("studied for a bit");
+        NaturalLogDraftResponse response = new NaturalLogDraftResponse(
+                null, "Couldn't tell how long this took -- try including a duration.",
+                DraftStatus.NEEDS_CLARIFICATION, null, List.of());
+
+        //Act
+        ResponseEntity<NaturalLogDraftResponse> expectedResponse = ResponseEntity.ok(response);
+        when(naturalLogService.parseNaturalLog(userId, request.text())).thenReturn(expectedResponse);
+
+        //Assert
+        ResponseEntity<NaturalLogDraftResponse> actualResponse = activityLogController.parseNaturalLog(userId, request);
+        assertEquals(expectedResponse, actualResponse);
+        assertNotNull(actualResponse.getBody());
+        assertNull(actualResponse.getBody().draft());
+        assertNotNull(actualResponse.getBody().status());
+        assertEquals(DraftStatus.NEEDS_CLARIFICATION, actualResponse.getBody().status());
     }
 }

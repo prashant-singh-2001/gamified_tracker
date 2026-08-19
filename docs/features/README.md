@@ -1,6 +1,6 @@
 # Feature Docs — Gamified Tracker
 
-Twenty standalone deep-dives into the notable engineering work in this codebase — each one covers
+Twenty-one standalone deep-dives into the notable engineering work in this codebase — each one covers
 what the feature is, why it's worth a second look, how it actually works (with a diagram and the
 load-bearing code), its config, and a way to try it live. Verified against the current source at
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
@@ -43,6 +43,7 @@ award to CI) that links back to the relevant deep-dive below for the *why* behin
 | [Streaks](streaks.md) | A consecutive-day gap-state-machine multiplier that stacks onto XP, entirely inside the producing service — the consuming service needed zero changes |
 | [Analytics](analytics.md) | In-memory stream aggregation over raw activity logs (category summaries, a zero-filled daily XP timeline, a single-query weekly report) — deliberately sidesteps this repo's H2/Postgres SQL-portability trap |
 | [AI Weekly Coaching Digest](ai-weekly-digest.md) | A provider-agnostic `ChatModel` narrator over numbers computed entirely in Java, interchangeable between a local Ollama container and Docker Model Runner with zero code change, always-200 with a `narrativeStatus` field so "off" and "the model failed" never need a second response shape |
+| [Natural-Language Activity Logging](natural-language-logging.md) | An LLM that only classifies (no timestamp field exists on its output type) feeding a pure, `Clock`-driven Java resolver that guarantees a resolved draft can never land in the future — draft-then-commit, never a direct write, because an LLM reading a duration is a guess and XP here is irreversible |
 
 ## Cross-Cutting & Quality
 
@@ -78,6 +79,7 @@ award to CI) that links back to the relevant deep-dive below for the *why* behin
 | Streaks | activity-service | `service/impl/ActivityLogServiceImpl.java` (`applyStreak`) |
 | Analytics | activity-service | `service/impl/AnalyticsServiceImpl.java` |
 | AI weekly coaching digest | activity-service | `service/impl/InsightsServiceImpl.java`, `domain/WeeklyDigestNarrator.java`, `domain/ChatModelWeeklyDigestNarrator.java` |
+| Natural-language activity logging | activity-service | `service/impl/NaturalLogServiceImpl.java`, `domain/LogIntentResolver.java`, `domain/NaturalLanguageLogParser.java` |
 | Fuzzy activity-name matching | activity-service | `domain/ActivityMatcher.java`, `domain/ActivityNameScorer.java`, `service/ActivityNameResolutionService.java` |
 | Error handling | all three web services | `exception/GlobalExceptionHandler.java` |
 | Testing strategy | all six modules | `*/src/test/...` |

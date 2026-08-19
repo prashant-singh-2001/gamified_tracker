@@ -2,8 +2,11 @@ package com.tracker.activity.controller;
 
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
+import com.tracker.activity.dto.NaturalLogDraftResponse;
+import com.tracker.activity.dto.NaturalLogRequest;
 import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.service.ActivityLogService;
+import com.tracker.activity.service.NaturalLogService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 
@@ -19,6 +22,7 @@ import java.util.List;
 public class ActivityLogController {
 
     private final ActivityLogService activityLogService;
+    private final NaturalLogService naturalLogService;
 
 
     @GetMapping("/{id}")
@@ -31,6 +35,15 @@ public class ActivityLogController {
         return activityLogService.addActivityLogResponseResponseEntity(userId, activityLogRequest);
     }
 
+    // Issue #70. Writes nothing -- POST the returned draft to addActivityLog above to actually log
+    // it. userId is taken from the trusted header (never a path variable) for the same reason every
+    // other endpoint here does, even though this call has no per-user data to look up today.
+    @PostMapping("/natural")
+    public ResponseEntity<NaturalLogDraftResponse> parseNaturalLog(
+            @RequestHeader("userId") Long userId, @Valid @RequestBody NaturalLogRequest request) {
+        return naturalLogService.parseNaturalLog(userId, request.text());
+    }
+
     @GetMapping("/user/{id}")
     public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(@PathVariable("id") Long id) {
         return activityLogService.getAllActivityForUser(id);
@@ -41,5 +54,5 @@ public class ActivityLogController {
         return activityLogService.getStreaksForUser(id);
     }
 
-   
+
 }
