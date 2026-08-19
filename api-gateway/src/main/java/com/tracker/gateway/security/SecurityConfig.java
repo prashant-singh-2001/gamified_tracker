@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -65,7 +66,16 @@ public class SecurityConfig {
                         // level_tracker. gamification-service has no Spring Security of its own,
                         // so this is the only place it can be enforced.
                         .requestMatchers(HttpMethod.POST, "/api/level", "/api/level/").hasRole("ADMIN")
+                        // #81: threshold rows drive the leveling curve for every user. Only the
+                        // create path is gated — POST /threshold/activity is a read that happens
+                        // to use POST for its request body, not a write.
+                        .requestMatchers(HttpMethod.POST, "/api/threshold", "/api/threshold/").hasRole("ADMIN")
+                        // #83: full rank recompute is an expensive maintenance operation, not a
+                        // user action.
+                        .requestMatchers(HttpMethod.POST, "/api/ranks/recompute", "/api/ranks/recompute/")
+                        .hasRole("ADMIN")
                         .anyRequest().authenticated())
+                .cors(Customizer.withDefaults())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt
                                 .decoder(jwtDecoder)

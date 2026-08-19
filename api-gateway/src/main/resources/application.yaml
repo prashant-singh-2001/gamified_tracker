@@ -137,6 +137,13 @@ eureka:
 
 
 
+# CORS (#61). Empty origins = all cross-origin requests denied; a frontend opts in via env.
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+  allowed-methods: ${CORS_ALLOWED_METHODS:GET,POST,PUT,PATCH,DELETE,OPTIONS}
+  allowed-headers: ${CORS_ALLOWED_HEADERS:Authorization,Content-Type}
+  max-age-seconds: ${CORS_MAX_AGE:3600}
+
 # Rate limiting (token bucket: `capacity` tokens refilled every `period-seconds`)
 rate-limit:
   activity:                                    # proxied /api/activity/**, /api/activitylog/**

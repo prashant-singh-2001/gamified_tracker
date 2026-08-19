@@ -77,11 +77,15 @@ explains it in-place:
 ```
 See [Rate Limiting](rate-limiting.md) for why the key resolver is DSL-only.
 
-**Admin-only routes ride the same beans.** `POST /api/level` (manual XP award, issue #74) matches
-`gamificationRoute`'s existing `/api/level/**` predicate — no new route or rate-limit bucket needed.
-The `hasRole("ADMIN")` check itself happens earlier, in Spring Security's filter chain
-(`SecurityConfig`), before the request ever reaches this router — see
-[Authentication & Identity](authentication-and-identity.md).
+**Admin-only routes ride the same beans.** `POST /api/level`, `POST /api/threshold`, and
+`POST /api/ranks/recompute` (issues #74, #81, #83) all match an existing route's predicate —
+no new route or rate-limit bucket needed for any of them. The `hasRole("ADMIN")` check itself
+happens earlier, in Spring Security's filter chain (`SecurityConfig`), before the request ever
+reaches this router — see [Authentication & Identity](authentication-and-identity.md).
+
+**CORS (issue #61)** is likewise a filter-chain concern, not a routing one — it runs ahead of these
+routes regardless of which one a request matches. See
+[Authentication & Identity](authentication-and-identity.md) for the policy.
 
 ### What used to be here
 

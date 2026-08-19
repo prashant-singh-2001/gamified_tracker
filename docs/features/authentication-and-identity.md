@@ -129,13 +129,18 @@ when the claim is absent.
 ```java
 http.csrf(csrf -> csrf.disable())
         .authorizeHttpRequests(auth -> auth
+                .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()
                 .requestMatchers("/auth/**", "/swagger-ui.html", "/swagger-ui/**",
                         "/v3/api-docs", "/v3/api-docs/**", "/swagger-resources/**", "/actuator/**")
                 .permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")
                 .requestMatchers("/api/activitylog/review/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/level", "/api/level/").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/threshold", "/api/threshold/").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/ranks/recompute", "/api/ranks/recompute/")
+                .hasRole("ADMIN")
                 .anyRequest().authenticated())
+        .cors(Customizer.withDefaults())
         .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt
                         .decoder(jwtDecoder)
@@ -144,13 +149,41 @@ http.csrf(csrf -> csrf.disable())
 ```
 Role gating happens at the **URL level**, not `@PreAuthorize` — because routing is declarative
 (see [API Gateway Routing](api-gateway-routing.md)), there's no controller method left to annotate.
-The `POST /api/level` matcher is the newest of the three (issue #74): that endpoint used to be a
+The `dispatcherTypeMatchers(...).permitAll()` entry must stay **first** (issue #95): this chain also
+governs the container's internal `ERROR`/`FORWARD` dispatch to Boot's `/error`, and on that dispatch
+the re-authenticating filters are skipped — without this entry, `.anyRequest().authenticated()` would
+deny the anonymous `/error` dispatch and mask every downstream failure (a 404, a 500, anything) as an
+empty 403. It opens nothing: `ERROR`/`FORWARD` are internal dispatches, and the originating `REQUEST`
+dispatch was already authorized by the rules below.
+
+`POST /api/level` (#74) was the first of what's now five ADMIN-gated writes; `POST /api/threshold`
+and `POST /api/ranks/recompute` (#81, #83) follow the same shape. `POST /api/level` used to be a
 public, unbounded XP mint (see [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)) — any
-authenticated user could award themselves arbitrary XP for arbitrary activities. All three ADMIN
-matchers share the same limitation: they're enforced **only** at the gateway, because
-activity-service and gamification-service have no Spring Security of their own and are directly
-reachable in the dev compose setup (`:8081`, `:8082`) — bypassing the gateway also bypasses every
-role check on it.
+authenticated user could award themselves arbitrary XP for arbitrary activities. `POST /api/threshold`
+writes the XP thresholds that drive the entire leveling curve for every user; leaving it open meant
+any authenticated user could rewrite game economy for everyone. `POST /api/ranks/recompute` triggers
+an expensive full leaderboard recompute — a maintenance operation, not something a regular user should
+be able to trigger on demand (a cheap DoS vector otherwise). All five ADMIN matchers share the same
+limitation: they're enforced **only** at the gateway, because activity-service and gamification-service
+have no Spring Security of their own and are directly reachable in the dev compose setup (`:8081`,
+`:8082`) — bypassing the gateway also bypasses every role check on it.
+
+**Not gated:** `POST /threshold/activity` (`ActivityLevelThresholdController.getActivityLevelThresholdById`)
+looks like a write from its verb, but it's a read that uses POST only to carry a lookup body — gating
+it would have broken it for every regular user, so the `/api/threshold` matcher above is deliberately
+an exact path, not `/api/threshold/**`.
+
+**CORS (#61).** `.cors(Customizer.withDefaults())` picks up a `CorsConfigurationSource` bean
+(`CorsConfig`, backed by `CorsProperties`) rather than hand-rolling one — the same
+`@ConfigurationProperties` record pattern as `RateLimitProperties`. The Spring Security `CorsFilter`
+this registers runs ahead of the authorization rules above, so browser preflight `OPTIONS` requests
+are answered before any auth check — no explicit `permitAll` for `OPTIONS` is needed (and adding one
+would open every gated path to unauthenticated `OPTIONS`, a real hole). No CORS configuration existed
+anywhere in the repo before this; the default (`CORS_ALLOWED_ORIGINS` unset) is an **empty allowed-origins
+list, which denies every cross-origin request** — this ships inert with zero risk until a frontend
+opts in by setting the env var. `allowCredentials` stays `false`: this API's auth is always
+`Authorization: Bearer`, never cookies, so credentialed CORS is never needed (and combining it with a
+wildcard origin is a classic misconfiguration this sidesteps entirely).
 
 **Admin provisioning.** Since `register` can no longer take a role from the client (see above), the
 only way to create an ADMIN account is `AdminBootstrap`, an `ApplicationRunner` gated by
@@ -379,6 +412,15 @@ app:
 `AdminBootstrap` throws `IllegalStateException` at startup if `enabled=true` with a blank email or
 password, rather than silently no-op-ing on a half-configured bootstrap.
 
+```yaml
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}                              # empty = deny all cross-origin
+  allowed-methods: ${CORS_ALLOWED_METHODS:GET,POST,PUT,PATCH,DELETE,OPTIONS}
+  allowed-headers: ${CORS_ALLOWED_HEADERS:Authorization,Content-Type}
+  max-age-seconds: ${CORS_MAX_AGE:3600}
+```
+All four are in `.env.example`, `CORS_ALLOWED_ORIGINS` blank by default (see CORS above).
+
 ## Tests
 
 `SecurityConfigTest` covers the two beans directly — that `jwtDecoder` is built from the configured
@@ -386,9 +428,16 @@ secret, and that the converter maps an `ADMIN` role claim to `ROLE_ADMIN` while 
 falls back to `ROLE_USER`. It mocks `HttpSecurity` and never invokes `filterChain(...)`, so it does
 **not** exercise any `hasRole("ADMIN")` matcher — `SecurityRulesTest` closes that gap: a
 `@SpringBootTest` + `@AutoConfigureMockMvc` test that mints real USER/ADMIN tokens with `JwtUtil` and
-asserts `POST /api/level` and `POST /api/activity` return `403` for a USER token and let an ADMIN
-token past authorization (verified by asserting the response isn't `403`, since what happens next —
-routing to a live service instance — is out of scope for a gateway-only test). `UserIdHeaderFilterTest`
+asserts `POST /api/level`, `POST /api/activity`, `POST /api/threshold`, and `POST /api/ranks/recompute`
+return `403` for a USER token and let an ADMIN token past authorization (verified by asserting the
+response isn't `403`, since what happens next — routing to a live service instance — is out of scope
+for a gateway-only test). It also covers the #81 deviation directly: `POST /api/threshold/activity`
+must stay open to a plain USER token, pinned as a named regression test so the exact-path matcher
+doesn't get "simplified" back into `/api/threshold/**` later. `CorsDefaultOriginsTest` and
+`CorsAllowedOriginTest` cover the CORS default-closed policy the same way — a real filter chain, a
+real preflight `OPTIONS` request — asserting no `Access-Control-Allow-Origin` header comes back with
+the default empty origin list, and that setting `cors.allowed-origins` opens exactly that origin and
+no other. `UserIdHeaderFilterTest`
 covers the filter's four behaviours: skipped with no authentication, `401` on a missing `userId`
 claim, header injected on the happy path, and pass-through when the authentication isn't a
 `JwtAuthenticationToken`. `RefreshTokenServiceTest` covers `generateRefreshToken` and all four
