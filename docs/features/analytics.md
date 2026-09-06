@@ -93,11 +93,15 @@ most XP this week, not the most sessions.
   field always render-able, but a client can't distinguish "doubled from a small base" from
   "went from nothing to something."
 - **`topCategory` is `null`** for a week with no logs at all (`Stream.max()` on an empty stream).
-- **No ownership check beyond the gateway's trusted header pattern used elsewhere** — these
-  endpoints are path-scoped by `{userId}`, not header-scoped, so any authenticated caller can read
-  any other user's analytics by changing the path segment. Consistent with this codebase's other
-  intentionally-open reads (`GET /api/level/user/{id}`, `GET /api/activitylog/user/{id}`), but worth
-  naming since it wasn't an explicit design discussion for this specific feature.
+- **Ownership check added by #88, not present when this feature originally shipped.** These
+  endpoints are path-scoped by `{userId}`, not header-scoped, so the fix is a comparison rather than
+  a redesign: `AnalyticsServiceImpl` now checks the trusted `userId` header against the path
+  `{userId}` and throws before touching the repository on a mismatch, rendered as a `403` by
+  `GlobalExceptionHandler`. Before #88 this was a real, unguarded IDOR — any authenticated caller
+  could read any other user's category/XP-timeline/weekly-report analytics by changing the path
+  segment. See [Authentication & Identity Propagation](authentication-and-identity.md) for the fuller
+  writeup (it also covers the sibling fixes on `GET /activitylog/{id}` and `GET /level/{id}`, which
+  needed a 404-vs-403 distinction this feature's path-scoped shape doesn't).
 
 ## Config
 

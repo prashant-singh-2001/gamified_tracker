@@ -14,7 +14,7 @@ award to CI) that links back to the relevant deep-dive below for the *why* behin
 
 | Doc | What it demonstrates |
 |---|---|
-| [Authentication & Identity Propagation](authentication-and-identity.md) | JWT issuance, validation delegated to Spring Security's OAuth2 resource server, and the IDOR fix: why overriding `getHeader()` alone wasn't enough, and what closes it |
+| [Authentication & Identity Propagation](authentication-and-identity.md) | JWT issuance, validation delegated to Spring Security's OAuth2 resource server, the header-spoofing IDOR fix (why overriding `getHeader()` alone wasn't enough), and the per-resource read-ownership IDOR fix that closes the gap the first one didn't touch |
 | [Rate Limiting](rate-limiting.md) | Redis-backed Bucket4j on the Server MVC gateway (not the reactive `RequestRateLimiter`) — two independent throttles for two different reasons |
 | [API Gateway Routing](api-gateway-routing.md) | Java-DSL declarative routing, `lb://` load balancing, and why routes moved out of YAML |
 | [Session Integrity](session-integrity.md) | A from-scratch Iglewicz-Hoaglin outlier detector with three fallback tiers, an absolute threshold and daily cap closing a self-consistency gap the statistics alone couldn't catch, and a quarantine-not-reject admin review workflow |
@@ -66,6 +66,7 @@ award to CI) that links back to the relevant deep-dive below for the *why* behin
 | Feature | Service(s) | Entry point to read first |
 |---|---|---|
 | Auth & identity propagation | api-gateway | `security/SecurityConfig.java`, `security/UserIdHeaderFilter.java` |
+| Per-resource read ownership (IDOR) | activity-service, gamification-service | `exception/OwnershipViolationException.java` (both services), `service/impl/ActivityLogServiceImpl.java` |
 | Refresh token rotation | api-gateway | `auth/RefreshTokenService.java`, `auth/RefreshTokenRevocationService.java` |
 | Rate limiting | api-gateway | `config/RateLimitConfig.java` |
 | Gateway routing | api-gateway | `config/RouteConfiguration.java` |

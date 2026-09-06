@@ -172,6 +172,89 @@ class SecurityRulesTest {
         }
     }
 
+    @Test
+    void getLevel_withUserToken_isForbidden() throws Exception {
+        // #76/#88: every user's tracker rows, no single subject to compare -- ADMIN only.
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        mockMvc.perform(get("/api/level")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void getLevel_withAdminToken_isNotForbidden() throws Exception {
+        String token = jwtUtil.generateToken("admin@example.com", Role.ADMIN, 99L);
+
+        try {
+            MvcResult result = mockMvc.perform(get("/api/level")
+                            .header("Authorization", "Bearer " + token))
+                    .andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
+    @Test
+    void getLevelActivity_withUserToken_isForbidden() throws Exception {
+        // #88: every user's tracker rows for one activity, no single subject to compare --
+        // ADMIN only. GET /leaderboard/activity/{id} is the public equivalent.
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        mockMvc.perform(get("/api/level/activity/1")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void getLevelActivity_withAdminToken_isNotForbidden() throws Exception {
+        String token = jwtUtil.generateToken("admin@example.com", Role.ADMIN, 99L);
+
+        try {
+            MvcResult result = mockMvc.perform(get("/api/level/activity/1")
+                            .header("Authorization", "Bearer " + token))
+                    .andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
+    // #76/#88 regression guard: GET /level/{id} and GET /level/user/{id} are per-user reads
+    // guarded downstream (in gamification-service, against the trusted userId header) -- they
+    // must NOT be swallowed by the new GET /api/level / GET /api/level/activity/** ADMIN
+    // matchers above, or a plain user would lose access to their own data.
+    @Test
+    @DisplayName("GET /level/{id} stays open to a plain USER -- it's self-scoped downstream, not ADMIN-only (#76/#88)")
+    void getLevelById_withUserToken_isNotForbidden() throws Exception {
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        try {
+            MvcResult result = mockMvc.perform(get("/api/level/1")
+                            .header("Authorization", "Bearer " + token))
+                    .andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
+    @Test
+    @DisplayName("GET /level/user/{userId} stays open to a plain USER -- it's self-scoped downstream, not ADMIN-only (#76/#88)")
+    void getLevelByUserId_withUserToken_isNotForbidden() throws Exception {
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        try {
+            MvcResult result = mockMvc.perform(get("/api/level/user/1")
+                            .header("Authorization", "Bearer " + token))
+                    .andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
     // #95: before the fix, this chain's .anyRequest().authenticated() also governed the
     // container's internal ERROR dispatch to /error. On that dispatch the re-authenticating
     // filters are skipped, the context is anonymous, /error matched no permitAll entry, and

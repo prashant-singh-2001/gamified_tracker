@@ -1,13 +1,13 @@
 # Testing Strategy — Sliced, Fast, Hermetic
 
-**Modules:** all six · **48 test classes, 210 tests** · **Key techniques:** test slices
+**Modules:** all six · **73 test classes, 398 tests** · **Key techniques:** test slices
 (`@WebMvcTest`, `@DataJpaTest`), Mockito unit tests, `InOrder`/`ArgumentCaptor`, H2 for the
 persistence layer, `@MockBean`/`@MockitoBean` to keep infra-dependent context tests hermetic
 
 ## What it is / why it's notable
 
 The suite is built the way a Spring test suite *should* be — as a pyramid of fast, focused slices
-rather than a pile of slow full-context integration tests. 48 test classes across the six modules,
+rather than a pile of slow full-context integration tests. 73 test classes across the six modules,
 each using the narrowest Spring test slice that still exercises the thing under test (or no Spring
 context at all, where a plain constructor call does the job). The interesting parts aren't the counts
 — they're the specific choices that keep the suite fast and deterministic: verifying **ordering** of
@@ -149,6 +149,21 @@ consumer, the `ActivityLoggedEvent` wire format and both sides' `__TypeId__` map
 (`RabbitConfigTest`), concurrency-safe `save()` + archiving, the `read`/`is_read` derived-query
 regression guard, notification ownership scoping, the XP-multiplier resolution, and (new) the
 in-memory analytics aggregation in `AnalyticsServiceImplTest`.
+
+**Authorization/IDOR (#88).** Until this issue, the suite's only ownership assertion
+(`NotificationControllerTest.markRead_missingOrNotOwned_returns404`) was stub-driven — a `doThrow`
+on a mocked service proves the controller maps an exception to a status code, not that any ownership
+*rule* exists. Every per-resource read endpoint (`ActivityLogControllerTest`,
+`AnalyticsControllerTest`, `LevelTrackerControllerTest`) and its underlying service
+(`ActivityLogServiceImplTest`, `AnalyticsServiceImplTest`, `LevelTrackerServiceImplTest`) now has a
+same-user-succeeds / other-user-403(-or-404) pair, and `SecurityRulesTest` pins the two role-gated
+reads (`GET /api/level`, `GET /api/level/activity/**`) alongside a named regression test that the
+per-user reads next to them (`GET /api/level/{id}`, `GET /api/level/user/{userId}`) stay open to a
+plain USER token — the shape that would silently reintroduce #76 if a matcher were ever "simplified."
+Two levels deliberately: a `@WebMvcTest`/full-context test proves the real `@RestControllerAdvice`
+renders the right HTTP status; the service test (mocked repository, real service logic) proves the
+comparison that produces it. Neither alone is sufficient — a mocked-service controller test can't see
+the rule, and a service test alone doesn't prove the HTTP contract.
 
 ## Known gap (honest inventory)
 

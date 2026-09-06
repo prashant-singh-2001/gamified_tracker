@@ -25,9 +25,12 @@ public class ActivityLogController {
     private final NaturalLogService naturalLogService;
 
 
+    // #78/#88: id is an ActivityLog PK, not a userId -- ownership is enforced against the
+    // trusted header inside the service (see ActivityLogServiceImpl.getActivityLogResponseEntity).
     @GetMapping("/{id}")
-    public ResponseEntity<ActivityLogResponse> getActivityLog(@PathVariable("id") Long id) {
-        return activityLogService.getActivityLogResponseEntity(id);
+    public ResponseEntity<ActivityLogResponse> getActivityLog(@RequestHeader("userId") Long callerUserId,
+                                                               @PathVariable("id") Long id) {
+        return activityLogService.getActivityLogResponseEntity(callerUserId, id);
     }
 
     @PostMapping("/")
@@ -44,14 +47,18 @@ public class ActivityLogController {
         return naturalLogService.parseNaturalLog(userId, request.text());
     }
 
+    // #79/#88: ownership enforced against the trusted header inside the service.
     @GetMapping("/user/{id}")
-    public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(@PathVariable("id") Long id) {
-        return activityLogService.getAllActivityForUser(id);
+    public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(@RequestHeader("userId") Long callerUserId,
+                                                                            @PathVariable("id") Long id) {
+        return activityLogService.getAllActivityForUser(callerUserId, id);
     }
 
+    // #80/#88: ownership enforced against the trusted header inside the service.
     @GetMapping("/streaks/user/{id}")
-    public ResponseEntity<List<StreakResponse>> getAllStreaksForUser(@PathVariable("id") Long id) {
-        return activityLogService.getStreaksForUser(id);
+    public ResponseEntity<List<StreakResponse>> getAllStreaksForUser(@RequestHeader("userId") Long callerUserId,
+                                                                      @PathVariable("id") Long id) {
+        return activityLogService.getStreaksForUser(callerUserId, id);
     }
 
 

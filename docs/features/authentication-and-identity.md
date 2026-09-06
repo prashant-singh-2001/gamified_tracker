@@ -139,6 +139,8 @@ http.csrf(csrf -> csrf.disable())
                 .requestMatchers(HttpMethod.POST, "/api/threshold", "/api/threshold/").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/api/ranks/recompute", "/api/ranks/recompute/")
                 .hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/level", "/api/level/").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/level/activity/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
         .cors(Customizer.withDefaults())
         .oauth2ResourceServer(oauth2 -> oauth2
@@ -172,6 +174,35 @@ have no Spring Security of their own and are directly reachable in the dev compo
 looks like a write from its verb, but it's a read that uses POST only to carry a lookup body — gating
 it would have broken it for every regular user, so the `/api/threshold` matcher above is deliberately
 an exact path, not `/api/threshold/**`.
+
+**Two ADMIN-gated reads (#88), not just writes.** `GET /api/level` and `GET /api/level/activity/{id}`
+return **every** user's tracker rows with no single subject to compare against the caller — there's
+no "owner" to check, so they can't be self-service-scoped the way the per-user reads below are.
+ADMIN-gating them here is the only option, the same reasoning as the five ADMIN-gated writes above.
+Both matchers are exact/prefix-scoped on purpose: `GET /api/level/activity/**` must not swallow
+`GET /api/level/{id}` or `GET /api/level/user/{userId}` — those two stay open to any authenticated
+user because they're self-service-scoped **downstream** instead (see below), and a regression test
+in `SecurityRulesTest` pins exactly this so a future "simplify the matcher" pass can't merge them.
+
+**Per-resource read ownership lives in the downstream services, not here (#76–80, #88).** Everything
+above is role-based — USER vs ADMIN — and perimeter-only. It was never the layer that stopped one
+regular user from reading *another* regular user's own data: `GET /activitylog/{id}`,
+`GET /activitylog/user/{id}`, `GET /activitylog/streaks/user/{id}`, `GET /level/{id}`,
+`GET /level/user/{userId}`, and the three `GET /activitylog/analytics/user/{userId}/*` endpoints all
+took the subject from the URL with no check that it matched the caller. Issues #76–80 reported five of
+these in 2026 and were closed the same day with no commit and no code change — the holes were still
+live in `main` until #88 actually closed them. The fix sits in `activity-service` and
+`gamification-service`, the only place it *can* sit: those services receive the caller's real identity
+in the trusted `userId` header (`UserIdHeaderFilter` guarantees it can't be forged), so each service
+compares that header against the userId or row it's asked for and throws before touching data it
+shouldn't. Downstream services can't do this by role — `UserIdHeaderFilter` propagates only `userId`,
+never `role` — so an ownership check is necessarily self-only; there is no way for a service to grant
+itself an "admin can read anyone's data" exception without the gateway forwarding the role too. A
+mismatch on a userId-in-path endpoint is a 403 (`OwnershipViolationException` →
+`ProblemDetail.FORBIDDEN`, nothing about the target account echoed back); a mismatch on a
+PK-in-path endpoint (`GET /activitylog/{id}`, `GET /level/{id}`) is a 404, indistinguishable from a
+genuinely missing row — a 403 there would confirm the row exists to someone who has no business
+knowing that.
 
 **CORS (#61).** `.cors(Customizer.withDefaults())` picks up a `CorsConfigurationSource` bean
 (`CorsConfig`, backed by `CorsProperties`) rather than hand-rolling one — the same
@@ -428,12 +459,15 @@ secret, and that the converter maps an `ADMIN` role claim to `ROLE_ADMIN` while 
 falls back to `ROLE_USER`. It mocks `HttpSecurity` and never invokes `filterChain(...)`, so it does
 **not** exercise any `hasRole("ADMIN")` matcher — `SecurityRulesTest` closes that gap: a
 `@SpringBootTest` + `@AutoConfigureMockMvc` test that mints real USER/ADMIN tokens with `JwtUtil` and
-asserts `POST /api/level`, `POST /api/activity`, `POST /api/threshold`, and `POST /api/ranks/recompute`
-return `403` for a USER token and let an ADMIN token past authorization (verified by asserting the
-response isn't `403`, since what happens next — routing to a live service instance — is out of scope
-for a gateway-only test). It also covers the #81 deviation directly: `POST /api/threshold/activity`
-must stay open to a plain USER token, pinned as a named regression test so the exact-path matcher
-doesn't get "simplified" back into `/api/threshold/**` later. `CorsDefaultOriginsTest` and
+asserts `POST /api/level`, `POST /api/activity`, `POST /api/threshold`, `POST /api/ranks/recompute`,
+`GET /api/level`, and `GET /api/level/activity/{id}` return `403` for a USER token and let an ADMIN
+token past authorization (verified by asserting the response isn't `403`, since what happens next —
+routing to a live service instance — is out of scope for a gateway-only test). It also covers two
+deviations directly, each a named regression test so a future "simplify the matcher" pass can't
+undo it: `POST /api/threshold/activity` (#81) must stay open to a plain USER token, and so must
+`GET /api/level/{id}` / `GET /api/level/user/{userId}` (#76/#88) — those two are self-service-scoped
+downstream, not ADMIN-only, so the new `GET /api/level/activity/**` matcher must not swallow them.
+`CorsDefaultOriginsTest` and
 `CorsAllowedOriginTest` cover the CORS default-closed policy the same way — a real filter chain, a
 real preflight `OPTIONS` request — asserting no `Access-Control-Allow-Origin` header comes back with
 the default empty origin list, and that setting `cors.allowed-origins` opens exactly that origin and
@@ -471,6 +505,11 @@ curl -X POST http://localhost:8080/api/activitylog -H "Authorization: Bearer $TO
   -H "userId: 999" -H "Content-Type: application/json" \
   -d '{"activityName":"Study","startTime":"2026-07-16T09:00:00","endTime":"2026-07-16T09:30:00"}'
 # -> the log (and its eventual XP) still lands on Ada's real id, never 999
+
+# Per-resource ownership (#88): authenticated as Ada (id 1), reading Bob's (id 2) logs by
+# substituting his id in the URL is now a real 403 -- not just a spoofed-header question.
+curl -i http://localhost:8080/api/activitylog/user/2 -H "Authorization: Bearer $TOKEN"
+# -> 403, ProblemDetail: "Not permitted to access another user's data"
 
 # 15 minutes later, the access token is dead — trade the refresh token for a new pair
 # instead of logging in again. The old $REFRESH is now burned; only the new one works.

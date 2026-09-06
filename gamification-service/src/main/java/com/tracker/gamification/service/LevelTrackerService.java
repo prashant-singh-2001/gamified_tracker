@@ -8,11 +8,15 @@ import java.util.List;
 
 public interface LevelTrackerService {
 
-    List<LevelTrackerDto> findByUserId(Long userId);
+    // #76/#88: callerUserId is the trusted header identity; userId is the path subject being
+    // requested. Throws OwnershipViolationException when they differ -- see that type's javadoc.
+    List<LevelTrackerDto> findByUserId(Long callerUserId, Long userId);
 
     List<LevelTrackerDto> findByActivityId(Long activityId);
 
-    LevelTrackerDto findById(Long id);
+    // #77/#88: ownership-scoped by callerUserId. A row owned by someone else renders identically
+    // to a missing row (404) -- see LevelTrackerRepository.findByIdAndUserId's javadoc.
+    LevelTrackerDto findById(Long callerUserId, Long id);
 
     List<LevelTrackerDto> findAll();
 

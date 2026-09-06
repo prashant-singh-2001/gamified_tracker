@@ -47,7 +47,9 @@ public class InsightsServiceImpl implements InsightsService {
 
         // Delegated, not recomputed: makes "insights and /weekly-report never disagree" true by
         // construction rather than by two copies of the same window math staying in sync.
-        WeeklyReportResponse totals = analyticsService.getWeeklyReport(userId).getBody();
+        // #88: userId is already the caller's own id (this method is header-scoped, never a
+        // path variable), so caller and subject are the same value by construction here.
+        WeeklyReportResponse totals = analyticsService.getWeeklyReport(userId, userId).getBody();
 
         List<ActivityLog> weekLogs = activityLogRepository.findByUserIdAndStartTimeBetween(
                 userId, weekStart.atStartOfDay(), today.atTime(LocalTime.MAX));

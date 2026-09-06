@@ -21,14 +21,19 @@ public class LevelTrackerController {
     @Autowired
     private LevelTrackerServiceImpl levelTrackerService;
 
+    // #88: every user's tracker rows, no per-user subject to compare -- ADMIN-gated at the
+    // gateway (SecurityConfig) rather than an ownership check here.
     @GetMapping
     public ResponseEntity<List<LevelTrackerDto>> getAllLevelTracker() {
         return ResponseEntity.ok(levelTrackerService.findAll());
     }
 
+    // #77/#88: id is a LevelTracker PK, not a userId -- ownership is enforced against the
+    // trusted header inside the service (see LevelTrackerServiceImpl.findById).
     @GetMapping("/{id}")
-    public ResponseEntity<LevelTrackerDto> getLevelTrackerById(@PathVariable @Positive(message = "id cannot be negative or zero") Long id) {
-        return ResponseEntity.ok(levelTrackerService.findById(id));
+    public ResponseEntity<LevelTrackerDto> getLevelTrackerById(@RequestHeader("userId") Long callerUserId,
+                                                                @PathVariable @Positive(message = "id cannot be negative or zero") Long id) {
+        return ResponseEntity.ok(levelTrackerService.findById(callerUserId, id));
     }
 
     // IDOR fix: userId now comes from the trusted "userId" header (injected by the
@@ -52,11 +57,16 @@ public class LevelTrackerController {
         return ResponseEntity.ok(levelTrackerService.awardManually(actorUserId, request));
     }
 
+    // #76/#88: ownership enforced against the trusted header inside the service.
     @GetMapping("/user/{userId}")
-    public ResponseEntity<List<LevelTrackerDto>> getLevelTrackerByUserId(@PathVariable @Positive(message = "id cannot be negative or zero") Long userId) {
-        return ResponseEntity.ok(levelTrackerService.findByUserId(userId));
+    public ResponseEntity<List<LevelTrackerDto>> getLevelTrackerByUserId(@RequestHeader("userId") Long callerUserId,
+                                                                          @PathVariable @Positive(message = "id cannot be negative or zero") Long userId) {
+        return ResponseEntity.ok(levelTrackerService.findByUserId(callerUserId, userId));
     }
 
+    // #88: returns every user's tracker row for this activity -- there is no single subject to
+    // compare against a caller, so this is ADMIN-gated at the gateway (SecurityConfig) instead
+    // of an ownership check here. GET /leaderboard/activity/{id} is the public equivalent.
     @GetMapping("/activity/{activityId}")
     public ResponseEntity<List<LevelTrackerDto>> getLevelTrackerByActivityId(@PathVariable @Positive(message = "id cannot be negative or zero") Long activityId) {
         return ResponseEntity.ok(levelTrackerService.findByActivityId(activityId));

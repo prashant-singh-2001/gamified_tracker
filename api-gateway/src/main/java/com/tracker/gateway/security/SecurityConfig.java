@@ -66,6 +66,13 @@ public class SecurityConfig {
                         // level_tracker. gamification-service has no Spring Security of its own,
                         // so this is the only place it can be enforced.
                         .requestMatchers(HttpMethod.POST, "/api/level", "/api/level/").hasRole("ADMIN")
+                        // #76/#88: GET /level and GET /level/activity/{id} return every user's
+                        // tracker rows with no single subject to compare against a caller, so they
+                        // can't be self-service-scoped the way GET /level/user/{userId} and
+                        // GET /level/{id} are (enforced in gamification-service instead). Exact
+                        // paths only -- must not swallow GET /level/{id} or GET /level/user/{id}.
+                        .requestMatchers(HttpMethod.GET, "/api/level", "/api/level/").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/level/activity/**").hasRole("ADMIN")
                         // #81: threshold rows drive the leveling curve for every user. Only the
                         // create path is gated — POST /threshold/activity is a read that happens
                         // to use POST for its request body, not a write.
