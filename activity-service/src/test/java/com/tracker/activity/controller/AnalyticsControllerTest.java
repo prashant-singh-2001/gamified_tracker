@@ -1,8 +1,10 @@
 package com.tracker.activity.controller;
 
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
+import com.tracker.activity.dto.HourOfDayXpResponse;
 import com.tracker.activity.dto.WeeklyReportResponse;
 import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.service.AnalyticsService;
@@ -16,6 +18,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.mockito.Mockito.when;
@@ -137,6 +140,45 @@ public class AnalyticsControllerTest {
                 .thenThrow(new OwnershipViolationException("Not permitted to access another user's data"));
 
         mockMvc.perform(get("/activitylog/analytics/user/{userId}/weekly-report", otherUsersId)
+                        .header("userId", callerUserId)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /activitylog/analytics/user/{userId}/best-time-of-day returns the hourly breakdown and bests (#72)")
+    void testGetBestTimeOfDay() throws Exception {
+        Long userId = 1L;
+        List<HourOfDayXpResponse> hourly = new ArrayList<>();
+        for (int hour = 0; hour < 24; hour++) {
+            hourly.add(new HourOfDayXpResponse(hour, hour == 9 ? 60L : 0L, hour == 9 ? 200.0 : 0.0, hour == 9 ? 1L : 0L));
+        }
+        BestTimeOfDayResponse response = new BestTimeOfDayResponse(hourly, 9, Category.STUDY, 9);
+
+        when(analyticsService.getBestTimeOfDay(userId, userId))
+                .thenReturn(ResponseEntity.ok(response));
+
+        mockMvc.perform(get("/activitylog/analytics/user/{userId}/best-time-of-day", userId)
+                        .header("userId", userId)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.hourlyBreakdown.length()").value(24))
+                .andExpect(jsonPath("$.hourlyBreakdown[9].totalXpEarned").value(200.0))
+                .andExpect(jsonPath("$.bestHour").value(9))
+                .andExpect(jsonPath("$.bestCategory").value("STUDY"))
+                .andExpect(jsonPath("$.bestCategoryHour").value(9));
+    }
+
+    @Test
+    @DisplayName("GET /activitylog/analytics/user/{userId}/best-time-of-day is 403 for another user's data (#88)")
+    void testGetBestTimeOfDay_forbiddenForOtherUser() throws Exception {
+        Long callerUserId = 1L;
+        Long otherUsersId = 2L;
+
+        when(analyticsService.getBestTimeOfDay(callerUserId, otherUsersId))
+                .thenThrow(new OwnershipViolationException("Not permitted to access another user's data"));
+
+        mockMvc.perform(get("/activitylog/analytics/user/{userId}/best-time-of-day", otherUsersId)
                         .header("userId", callerUserId)
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isForbidden());

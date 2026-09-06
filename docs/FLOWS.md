@@ -445,7 +445,7 @@ Kept deliberately shallow — controller → service → repository → DTO, no 
 | **Ranks** | `GET /ranks/me`, `/ranks/{tier}/leaderboard`, `/ranks` | **read from the materialized snapshot** written by flow 15 (`RankServiceImpl.java` — `userRankRepository` reads only) |
 | Notifications | `GET /notifications`, `/unread-count`, `POST /{id}/read` | reads/marks `level_up_event` rows from flow 12 |
 | Streaks | `GET /activitylog/streaks/user/{id}` | reads `activity_streak`, mutated only by flow 9 step 8 |
-| Analytics | `GET /activitylog/analytics/user/{userId}/{category-summary,xp-over-time,weekly-report}` | in-memory stream aggregation over raw logs — → [Analytics](features/analytics.md) |
+| Analytics | `GET /activitylog/analytics/user/{userId}/{category-summary,xp-over-time,weekly-report,best-time-of-day}` | in-memory stream aggregation over raw logs — → [Analytics](features/analytics.md) |
 
 The leaderboard/ranks contrast above is deliberate and worth internalizing: **nothing reads
 `activity_log` for ranking** — only `level_tracker` totals, either summed live or pre-aggregated.

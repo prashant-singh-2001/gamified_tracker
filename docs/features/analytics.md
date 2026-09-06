@@ -1,18 +1,19 @@
 # Analytics — In-Memory Aggregation Over Activity Logs
 
 **Service:** `activity-service` · **Key classes:** `AnalyticsController`, `AnalyticsServiceImpl`,
-`CategorySummaryResponse`, `DailyXpResponse`, `WeeklyReportResponse`
+`CategorySummaryResponse`, `DailyXpResponse`, `WeeklyReportResponse`, `HourOfDayXpResponse`,
+`BestTimeOfDayResponse`
 
 ## What it is / why it's notable
 
-Three read-only endpoints that turn a user's raw `activity_log` rows into dashboard-shaped
-summaries: totals per category, a daily XP timeline, and a week-over-week report. None of them
-introduce a new table or a scheduled job — every number is derived on request from
-`ActivityLogRepository`.
+Four read-only endpoints that turn a user's raw `activity_log` rows into dashboard-shaped
+summaries: totals per category, a daily XP timeline, a week-over-week report, and (issue #72) an
+hour-of-day breakdown. None of them introduce a new table or a scheduled job — every number is
+derived on request from `ActivityLogRepository`.
 
 The notable design choice is *where* the aggregation happens: in the JVM, with Java streams, not in
-SQL. `getCategorySummary` pulls every log a user has (`findByUserId`) and groups it with
-`Collectors.groupingBy`; the other two endpoints narrow first with
+SQL. `getCategorySummary` and `getBestTimeOfDay` pull every log a user has (`findByUserId`) and
+group it with `Collectors.groupingBy`; the other two endpoints narrow first with
 `findByUserIdAndStartTimeBetween` and then reduce in memory. This is a real trade-off, not an
 oversight — see below.
 
@@ -25,9 +26,11 @@ flowchart LR
     S -->|findByUserIdAndStartTimeBetween| R
     S --> G1["groupingBy(Category)"]
     S --> G2["groupingBy(LocalDate) + zero-fill"]
+    S --> G3["groupingBy(hour 0-23) + zero-fill"]
     G1 --> O1[CategorySummaryResponse list]
     G2 --> O2[DailyXpResponse list]
     G2 --> O3[WeeklyReportResponse]
+    G3 --> O4[BestTimeOfDayResponse]
 ```
 
 ### 1. Why streams, not SQL — sidestepping the H2/Postgres trap
@@ -80,6 +83,39 @@ of two, at the cost of pulling slightly more rows than either window needs alone
 `max(Map.Entry.comparingByValue())` over the **current week's** logs only — the category with the
 most XP this week, not the most sessions.
 
+### 4. "Analytics, not ML" — `getBestTimeOfDay` (issue #72)
+
+Issue #72 asked for "you tend to log the most XP in category X around hour Y"-style insights, and
+its own body makes the scoping call explicit: *"at the scale this app operates at, this is a
+`GROUP BY hour_of_day` over `activity_log`, not a model."* The implementation is exactly that —
+`Collectors.groupingBy(l -> l.getStartTime().getHour())` over the same `findByUserId` result
+`getCategorySummary` already uses, all-time rather than a rolling window (a personal tendency like
+"what hour do I usually log XP" is diluted by a short window, not clarified by one — the same
+all-time scope as `getCategorySummary`, for the same reason):
+
+```java
+Map<Integer, List<ActivityLog>> groupedByHour = logs.stream()
+        .filter(l -> l.getStartTime() != null)
+        .collect(Collectors.groupingBy(l -> l.getStartTime().getHour()));
+```
+
+`hourlyBreakdown` is zero-filled across all 24 hours, the same convention as `getXpOverTime`'s
+zero-filled days — `for (int hour = 0; hour < 24; hour++)` rather than iterating only the hours
+that appear in the grouped map, so a client can render a 24-bar chart without patching gaps. Three
+derived fields turn that raw distribution into the issue's one-sentence insight:
+
+- **`bestHour`** — the hour with the most XP across all categories combined, or `null` if the user
+  has no XP at all (not just no logs — a `0.0`-XP log at every hour would also leave this `null`,
+  since the max is filtered against `> 0.0` rather than merely picking whichever bucket a
+  five-way tie of zeros lands on).
+- **`bestCategory`** — resolved with the exact same `groupingBy(category, summingDouble(xpEarned))`
+  → `max(Map.Entry.comparingByValue())` idiom `getWeeklyReport.topCategory` uses, just over
+  all-time logs instead of the current week.
+- **`bestCategoryHour`** — the peak hour **within** `bestCategory` only (a second, filtered
+  `groupingBy` over just that category's logs) — this is the "hour Y" half of "category X around
+  hour Y," and it can differ from the overall `bestHour` if the user's biggest single category
+  isn't also their single best hour.
+
 ## Honest gaps
 
 - **Buckets by `startTime`, not `createdAt`.** Every other analytics/ordering concern in this
@@ -93,15 +129,21 @@ most XP this week, not the most sessions.
   field always render-able, but a client can't distinguish "doubled from a small base" from
   "went from nothing to something."
 - **`topCategory` is `null`** for a week with no logs at all (`Stream.max()` on an empty stream).
-- **Ownership check added by #88, not present when this feature originally shipped.** These
-  endpoints are path-scoped by `{userId}`, not header-scoped, so the fix is a comparison rather than
-  a redesign: `AnalyticsServiceImpl` now checks the trusted `userId` header against the path
-  `{userId}` and throws before touching the repository on a mismatch, rendered as a `403` by
-  `GlobalExceptionHandler`. Before #88 this was a real, unguarded IDOR — any authenticated caller
-  could read any other user's category/XP-timeline/weekly-report analytics by changing the path
-  segment. See [Authentication & Identity Propagation](authentication-and-identity.md) for the fuller
-  writeup (it also covers the sibling fixes on `GET /activitylog/{id}` and `GET /level/{id}`, which
-  needed a 404-vs-403 distinction this feature's path-scoped shape doesn't).
+- **Ownership check added by #88, not present when the first three endpoints originally shipped.**
+  These endpoints are path-scoped by `{userId}`, not header-scoped, so the fix is a comparison
+  rather than a redesign: `AnalyticsServiceImpl.requireSelf` checks the trusted `userId` header
+  against the path `{userId}` and throws before touching the repository on a mismatch, rendered as
+  a `403` by `GlobalExceptionHandler`. Before #88 this was a real, unguarded IDOR on all three
+  original endpoints — any authenticated caller could read any other user's
+  category/XP-timeline/weekly-report analytics by changing the path segment.
+  `getBestTimeOfDay` (#72) shipped after #88 and reuses the same guard from day one. See
+  [Authentication & Identity Propagation](authentication-and-identity.md) for the fuller writeup (it
+  also covers the sibling fixes on `GET /activitylog/{id}` and `GET /level/{id}`, which needed a
+  404-vs-403 distinction this feature's path-scoped shape doesn't).
+- **An exact tie for `bestHour`/`bestCategory`/`bestCategoryHour` resolves via `HashMap` grouping
+  order, not any documented rule** — same caveat as `getWeeklyReport.topCategory`'s
+  `Map.Entry.comparingByValue()` above. Fine for "which hour has the most XP" in practice, since
+  real XP totals rarely land on an exact double equality.
 
 ## Config
 
@@ -117,9 +159,12 @@ endpoints share `activity-service`'s rate limit, not a bucket of their own.
 curl http://localhost:8080/api/activitylog/analytics/user/1/category-summary -H "Authorization: Bearer $TOKEN"
 curl "http://localhost:8080/api/activitylog/analytics/user/1/xp-over-time?days=14" -H "Authorization: Bearer $TOKEN"
 curl http://localhost:8080/api/activitylog/analytics/user/1/weekly-report -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8080/api/activitylog/analytics/user/1/best-time-of-day -H "Authorization: Bearer $TOKEN"
+# -> {"hourlyBreakdown":[...24 entries...],"bestHour":9,"bestCategory":"STUDY","bestCategoryHour":9}
 
-# Direct against activity-service (bypassing the gateway, as this dev setup allows)
-curl http://localhost:8081/activitylog/analytics/user/1/category-summary
+# Direct against activity-service (bypassing the gateway, as this dev setup allows) — the
+# userId header stands in for the gateway-injected one, so it must be set explicitly
+curl http://localhost:8081/activitylog/analytics/user/1/category-summary -H "userId: 1"
 ```
 
 ## Related

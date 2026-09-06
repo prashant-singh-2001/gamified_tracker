@@ -3,6 +3,7 @@ package com.tracker.activity.service;
 import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
 import com.tracker.activity.dto.WeeklyReportResponse;
@@ -24,6 +25,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -213,7 +215,7 @@ public class AnalyticsServiceImplTest {
         assertEquals(100.0, response.getBody().percentageChange());
     }
 
-    // #88: all three analytics reads are keyed by a userId path variable with no other object to
+    // #88: all four analytics reads are keyed by a userId path variable with no other object to
     // compare against, so a caller/subject mismatch is always a 403 -- pinned once per method,
     // and each one must short-circuit before touching the repository.
     @Test
@@ -238,5 +240,79 @@ public class AnalyticsServiceImplTest {
         assertThrows(OwnershipViolationException.class,
                 () -> analyticsService.getWeeklyReport(1L, 2L));
         verifyNoInteractions(activityLogRepository);
+    }
+
+    @Test
+    @DisplayName("getBestTimeOfDay rejects a caller asking for another user's analytics (#88)")
+    void testGetBestTimeOfDay_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> analyticsService.getBestTimeOfDay(1L, 2L));
+        verifyNoInteractions(activityLogRepository);
+    }
+
+    @Test
+    @DisplayName("getBestTimeOfDay (#72) buckets XP by hour_of_day and picks the peak hour, category, and category-peak hour")
+    void testGetBestTimeOfDay_buildsHourlyBreakdownAndPicksBests() {
+        Long userId = 1L;
+
+        // Study, logged at 9am, is the biggest single contributor -- should win bestHour,
+        // bestCategory, and (trivially, since it's Study's only session) bestCategoryHour.
+        ActivityLog studyAt9am = ActivityLog.builder()
+                .id(1L).userId(userId).activity(studyActivity)
+                .startTime(LocalDateTime.of(2026, 1, 5, 9, 0))
+                .durationMinutes(60L).xpEarned(200.0)
+                .build();
+
+        // Gaming, split across two hours, sums to less than Study's single session.
+        ActivityLog gamingAt20pm = ActivityLog.builder()
+                .id(2L).userId(userId).activity(gamingActivity)
+                .startTime(LocalDateTime.of(2026, 1, 6, 20, 30))
+                .durationMinutes(30L).xpEarned(24.0)
+                .build();
+        ActivityLog gamingAt21pm = ActivityLog.builder()
+                .id(3L).userId(userId).activity(gamingActivity)
+                .startTime(LocalDateTime.of(2026, 1, 7, 21, 0))
+                .durationMinutes(30L).xpEarned(24.0)
+                .build();
+
+        when(activityLogRepository.findByUserId(userId))
+                .thenReturn(List.of(studyAt9am, gamingAt20pm, gamingAt21pm));
+
+        ResponseEntity<BestTimeOfDayResponse> response = analyticsService.getBestTimeOfDay(userId, userId);
+
+        assertNotNull(response.getBody());
+        BestTimeOfDayResponse body = response.getBody();
+
+        // Zero-filled: exactly 24 buckets, one per hour, regardless of how many have logs.
+        assertEquals(24, body.hourlyBreakdown().size());
+        assertEquals(9, body.hourlyBreakdown().get(9).hour());
+        assertEquals(200.0, body.hourlyBreakdown().get(9).totalXpEarned());
+        assertEquals(60L, body.hourlyBreakdown().get(9).totalDurationMinutes());
+        assertEquals(1L, body.hourlyBreakdown().get(9).totalSessions());
+        assertEquals(24.0, body.hourlyBreakdown().get(20).totalXpEarned());
+        assertEquals(24.0, body.hourlyBreakdown().get(21).totalXpEarned());
+        // An hour with no logs is present (zero-filled), not absent.
+        assertEquals(0.0, body.hourlyBreakdown().get(0).totalXpEarned());
+        assertEquals(0L, body.hourlyBreakdown().get(0).totalSessions());
+
+        assertEquals(9, body.bestHour());
+        assertEquals(Category.STUDY, body.bestCategory());
+        assertEquals(9, body.bestCategoryHour());
+    }
+
+    @Test
+    @DisplayName("getBestTimeOfDay (#72) returns a zero-filled breakdown and null bests when the user has no logs")
+    void testGetBestTimeOfDay_noLogs() {
+        Long userId = 42L;
+        when(activityLogRepository.findByUserId(userId)).thenReturn(List.of());
+
+        ResponseEntity<BestTimeOfDayResponse> response = analyticsService.getBestTimeOfDay(userId, userId);
+
+        assertNotNull(response.getBody());
+        BestTimeOfDayResponse body = response.getBody();
+        assertEquals(24, body.hourlyBreakdown().size());
+        assertNull(body.bestHour());
+        assertNull(body.bestCategory());
+        assertNull(body.bestCategoryHour());
     }
 }

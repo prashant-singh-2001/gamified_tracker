@@ -2,8 +2,10 @@ package com.tracker.activity.service.impl;
 
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
+import com.tracker.activity.dto.HourOfDayXpResponse;
 import com.tracker.activity.dto.WeeklyReportResponse;
 import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.repository.ActivityLogRepository;
@@ -16,6 +18,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -168,7 +171,63 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         return ResponseEntity.ok(report);
     }
 
-    // #88: shared guard for all three analytics reads -- each is keyed by a userId path
+    @Override
+    public ResponseEntity<BestTimeOfDayResponse> getBestTimeOfDay(Long callerUserId, Long userId) {
+        requireSelf(callerUserId, userId);
+        List<ActivityLog> logs = activityLogRepository.findByUserId(userId);
+
+        Map<Integer, List<ActivityLog>> groupedByHour = logs.stream()
+                .filter(l -> l.getStartTime() != null)
+                .collect(Collectors.groupingBy(l -> l.getStartTime().getHour()));
+
+        List<HourOfDayXpResponse> hourlyBreakdown = new ArrayList<>();
+        for (int hour = 0; hour < 24; hour++) {
+            List<ActivityLog> hourLogs = groupedByHour.getOrDefault(hour, List.of());
+
+            double hourXp = hourLogs.stream()
+                    .mapToDouble(ActivityLog::getXpEarned)
+                    .sum();
+
+            long hourDuration = hourLogs.stream()
+                    .mapToLong(l -> l.getDurationMinutes() != null ? l.getDurationMinutes() : 0L)
+                    .sum();
+
+            hourlyBreakdown.add(new HourOfDayXpResponse(hour, hourDuration, hourXp, (long) hourLogs.size()));
+        }
+
+        Integer bestHour = hourlyBreakdown.stream()
+                .max(Comparator.comparingDouble(HourOfDayXpResponse::totalXpEarned))
+                .filter(h -> h.totalXpEarned() > 0.0)
+                .map(HourOfDayXpResponse::hour)
+                .orElse(null);
+
+        // Mirrors getWeeklyReport's topCategory derivation exactly (group by category, sum XP,
+        // take the max) -- same tie-break behavior (Map iteration order on an exact tie), same
+        // null-when-no-logs shape.
+        Category bestCategory = logs.stream()
+                .filter(l -> l.getActivity() != null && l.getActivity().getCategory() != null)
+                .collect(Collectors.groupingBy(l -> l.getActivity().getCategory(), Collectors.summingDouble(ActivityLog::getXpEarned)))
+                .entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(null);
+
+        Integer bestCategoryHour = null;
+        if (bestCategory != null) {
+            bestCategoryHour = logs.stream()
+                    .filter(l -> l.getStartTime() != null && l.getActivity() != null
+                            && l.getActivity().getCategory() == bestCategory)
+                    .collect(Collectors.groupingBy(l -> l.getStartTime().getHour(), Collectors.summingDouble(ActivityLog::getXpEarned)))
+                    .entrySet().stream()
+                    .max(Map.Entry.comparingByValue())
+                    .map(Map.Entry::getKey)
+                    .orElse(null);
+        }
+
+        return ResponseEntity.ok(new BestTimeOfDayResponse(hourlyBreakdown, bestHour, bestCategory, bestCategoryHour));
+    }
+
+    // #88: shared guard for all four analytics reads -- each is keyed by a userId path
     // variable with no other object to compare against, so a mismatch is always a 403.
     private void requireSelf(Long callerUserId, Long userId) {
         if (!callerUserId.equals(userId)) {
