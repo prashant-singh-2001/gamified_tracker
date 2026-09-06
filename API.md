@@ -335,9 +335,13 @@ The first three were previously open reads (`{userId}` could be anyone) — fixe
 | Field | Type | Notes |
 |---|---|---|
 | `hourlyBreakdown` | array | 24 entries, one per hour `0`–`23`, **zero-filled** (same convention as `xp-over-time`) — each `{hour, totalDurationMinutes, totalXpEarned, totalSessions}` |
-| `bestHour` | Integer \| null | the hour with the most XP across all categories combined; `null` if the user has no XP at all |
-| `bestCategory` | String enum \| null | resolved the same way `weekly-report`'s `topCategory` is (`groupingBy` + `summingDouble` + `max`), over all-time logs instead of one week; `null` if no logs |
-| `bestCategoryHour` | Integer \| null | the peak hour **within** `bestCategory` only — the "hour Y" half of "you log the most XP in category X around hour Y"; `null` if `bestCategory` is `null` |
+| `bestHour` | Integer \| null | the hour with the most XP across all categories combined; `null` if the user has no XP at all (no logs, or logs that all earn `0.0` XP) |
+| `bestCategory` | String enum \| null | resolved the same way `weekly-report`'s `topCategory` is (`groupingBy` + `summingDouble` + `max`), over all-time logs instead of one week |
+| `bestCategoryHour` | Integer \| null | the peak hour **within** `bestCategory` only, scoped to that category's own logs — the "hour Y" half of "you log the most XP in category X around hour Y" |
+
+`bestHour`, `bestCategory`, and `bestCategoryHour` are **null as a set, never independently** —
+`bestCategory`/`bestCategoryHour` are only computed when `bestHour` is non-null, so a response never
+pairs a `null` `bestHour` with a non-null `bestCategory`.
 
 ---
 
