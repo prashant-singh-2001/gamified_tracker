@@ -48,14 +48,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
             Category category = entry.getKey();
             List<ActivityLog> categoryLogs = entry.getValue();
 
-            long totalDuration = categoryLogs.stream()
-                    .mapToLong(l -> l.getDurationMinutes() != null ? l.getDurationMinutes() : 0L)
-                    .sum();
-
-            double totalXp = categoryLogs.stream()
-                    .mapToDouble(ActivityLog::getXpEarned)
-                    .sum();
-
+            long totalDuration = sumDurationMinutes(categoryLogs);
+            double totalXp = sumXp(categoryLogs);
             long totalSessions = categoryLogs.size();
 
             summaries.add(new CategorySummaryResponse(category, totalDuration, totalXp, totalSessions));
@@ -84,16 +78,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
 
         for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
             List<ActivityLog> dayLogs = groupedByDate.getOrDefault(date, List.of());
-
-            double dayXp = dayLogs.stream()
-                    .mapToDouble(ActivityLog::getXpEarned)
-                    .sum();
-
-            long dayDuration = dayLogs.stream()
-                    .mapToLong(l -> l.getDurationMinutes() != null ? l.getDurationMinutes() : 0L)
-                    .sum();
-
-            result.add(new DailyXpResponse(date, dayXp, dayDuration));
+            result.add(new DailyXpResponse(date, sumXp(dayLogs), sumDurationMinutes(dayLogs)));
         }
 
         return ResponseEntity.ok(result);
@@ -120,13 +105,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 .filter(l -> l.getStartTime() != null && l.getStartTime().isBefore(currentStart))
                 .toList();
 
-        double currentWeekXp = currentWeekLogs.stream()
-                .mapToDouble(ActivityLog::getXpEarned)
-                .sum();
-
-        double previousWeekXp = previousWeekLogs.stream()
-                .mapToDouble(ActivityLog::getXpEarned)
-                .sum();
+        double currentWeekXp = sumXp(currentWeekLogs);
+        double previousWeekXp = sumXp(previousWeekLogs);
 
         double percentageChange;
         if (previousWeekXp == 0.0) {
@@ -135,9 +115,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
             percentageChange = ((currentWeekXp - previousWeekXp) / previousWeekXp) * 100.0;
         }
 
-        long totalActiveMinutes = currentWeekLogs.stream()
-                .mapToLong(l -> l.getDurationMinutes() != null ? l.getDurationMinutes() : 0L)
-                .sum();
+        long totalActiveMinutes = sumDurationMinutes(currentWeekLogs);
 
         Category topCategory = currentWeekLogs.stream()
                 .filter(l -> l.getActivity() != null && l.getActivity().getCategory() != null)
@@ -154,9 +132,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         List<DailyXpResponse> dailyBreakdown = new ArrayList<>();
         for (LocalDate date = currentWeekStart; !date.isAfter(today); date = date.plusDays(1)) {
             List<ActivityLog> dayLogs = currentWeekGrouped.getOrDefault(date, List.of());
-            double xp = dayLogs.stream().mapToDouble(ActivityLog::getXpEarned).sum();
-            long duration = dayLogs.stream().mapToLong(l -> l.getDurationMinutes() != null ? l.getDurationMinutes() : 0L).sum();
-            dailyBreakdown.add(new DailyXpResponse(date, xp, duration));
+            dailyBreakdown.add(new DailyXpResponse(date, sumXp(dayLogs), sumDurationMinutes(dayLogs)));
         }
 
         WeeklyReportResponse report = new WeeklyReportResponse(
@@ -176,23 +152,19 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         requireSelf(callerUserId, userId);
         List<ActivityLog> logs = activityLogRepository.findByUserId(userId);
 
-        Map<Integer, List<ActivityLog>> groupedByHour = logs.stream()
-                .filter(l -> l.getStartTime() != null)
+        // #103 review: a null startTime must exclude a row from every derived field, not just the
+        // hourly buckets -- previously bestCategory alone skipped this filter, so it could name a
+        // category that never appears anywhere in hourlyBreakdown.
+        List<ActivityLog> timedLogs = logs.stream().filter(l -> l.getStartTime() != null).toList();
+
+        Map<Integer, List<ActivityLog>> groupedByHour = timedLogs.stream()
                 .collect(Collectors.groupingBy(l -> l.getStartTime().getHour()));
 
         List<HourOfDayXpResponse> hourlyBreakdown = new ArrayList<>();
         for (int hour = 0; hour < 24; hour++) {
             List<ActivityLog> hourLogs = groupedByHour.getOrDefault(hour, List.of());
-
-            double hourXp = hourLogs.stream()
-                    .mapToDouble(ActivityLog::getXpEarned)
-                    .sum();
-
-            long hourDuration = hourLogs.stream()
-                    .mapToLong(l -> l.getDurationMinutes() != null ? l.getDurationMinutes() : 0L)
-                    .sum();
-
-            hourlyBreakdown.add(new HourOfDayXpResponse(hour, hourDuration, hourXp, (long) hourLogs.size()));
+            hourlyBreakdown.add(new HourOfDayXpResponse(
+                    hour, sumDurationMinutes(hourLogs), sumXp(hourLogs), (long) hourLogs.size()));
         }
 
         Integer bestHour = hourlyBreakdown.stream()
@@ -201,27 +173,43 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 .map(HourOfDayXpResponse::hour)
                 .orElse(null);
 
-        // Mirrors getWeeklyReport's topCategory derivation exactly (group by category, sum XP,
-        // take the max) -- same tie-break behavior (Map iteration order on an exact tie), same
-        // null-when-no-logs shape.
-        Category bestCategory = logs.stream()
-                .filter(l -> l.getActivity() != null && l.getActivity().getCategory() != null)
-                .collect(Collectors.groupingBy(l -> l.getActivity().getCategory(), Collectors.summingDouble(ActivityLog::getXpEarned)))
-                .entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse(null);
-
+        // #103 review: bestCategory/bestCategoryHour must go null together with bestHour -- a
+        // user with zero XP everywhere has no "best" anything, not a best category paired with
+        // no best hour. Both stay null unless bestHour cleared the same >0.0 bar.
+        Category bestCategory = null;
         Integer bestCategoryHour = null;
-        if (bestCategory != null) {
-            bestCategoryHour = logs.stream()
-                    .filter(l -> l.getStartTime() != null && l.getActivity() != null
-                            && l.getActivity().getCategory() == bestCategory)
-                    .collect(Collectors.groupingBy(l -> l.getStartTime().getHour(), Collectors.summingDouble(ActivityLog::getXpEarned)))
+        if (bestHour != null) {
+            // Mirrors getWeeklyReport's topCategory derivation exactly (group by category, sum
+            // XP, take the max), over the same startTime-filtered rows as hourlyBreakdown above.
+            // Tie-break here is Map iteration order, same as topCategory -- deliberately NOT the
+            // same rule bestHour/bestCategoryHour use (see below), since matching topCategory's
+            // shape exactly is the point.
+            bestCategory = timedLogs.stream()
+                    .filter(l -> l.getActivity() != null && l.getActivity().getCategory() != null)
+                    .collect(Collectors.groupingBy(l -> l.getActivity().getCategory(), Collectors.summingDouble(ActivityLog::getXpEarned)))
                     .entrySet().stream()
                     .max(Map.Entry.comparingByValue())
                     .map(Map.Entry::getKey)
                     .orElse(null);
+
+            if (bestCategory != null) {
+                // Scanned off the already-built groupedByHour buckets in ascending hour order
+                // (not a fresh grouping of the raw list), so an exact tie resolves to the
+                // earliest hour -- the same deterministic rule bestHour follows.
+                final Category winningCategory = bestCategory;
+                double[] categoryHourXp = new double[24];
+                for (int hour = 0; hour < 24; hour++) {
+                    categoryHourXp[hour] = sumXp(groupedByHour.getOrDefault(hour, List.of()).stream()
+                            .filter(l -> l.getActivity() != null && l.getActivity().getCategory() == winningCategory)
+                            .toList());
+                }
+                bestCategoryHour = 0;
+                for (int hour = 1; hour < 24; hour++) {
+                    if (categoryHourXp[hour] > categoryHourXp[bestCategoryHour]) {
+                        bestCategoryHour = hour;
+                    }
+                }
+            }
         }
 
         return ResponseEntity.ok(new BestTimeOfDayResponse(hourlyBreakdown, bestHour, bestCategory, bestCategoryHour));
@@ -233,5 +221,16 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         if (!callerUserId.equals(userId)) {
             throw new OwnershipViolationException("Not permitted to access another user's data");
         }
+    }
+
+    // #103 review: this exact idiom (XP sum, null-safe duration sum) was copy-pasted across all
+    // four public methods above -- one place for it now, and one place for the eventual
+    // reviewStatus filter (see the follow-up issue linked from analytics.md's honest gaps).
+    private static double sumXp(List<ActivityLog> logs) {
+        return logs.stream().mapToDouble(ActivityLog::getXpEarned).sum();
+    }
+
+    private static long sumDurationMinutes(List<ActivityLog> logs) {
+        return logs.stream().mapToLong(l -> l.getDurationMinutes() != null ? l.getDurationMinutes() : 0L).sum();
     }
 }

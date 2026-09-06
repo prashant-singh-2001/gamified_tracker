@@ -255,28 +255,32 @@ public class AnalyticsServiceImplTest {
     void testGetBestTimeOfDay_buildsHourlyBreakdownAndPicksBests() {
         Long userId = 1L;
 
-        // Study, logged at 9am, is the biggest single contributor -- should win bestHour,
-        // bestCategory, and (trivially, since it's Study's only session) bestCategoryHour.
+        // Study, logged at 9am, is the single biggest hour -- wins bestHour outright.
         ActivityLog studyAt9am = ActivityLog.builder()
                 .id(1L).userId(userId).activity(studyActivity)
                 .startTime(LocalDateTime.of(2026, 1, 5, 9, 0))
                 .durationMinutes(60L).xpEarned(200.0)
                 .build();
 
-        // Gaming, split across two hours, sums to less than Study's single session.
-        ActivityLog gamingAt20pm = ActivityLog.builder()
-                .id(2L).userId(userId).activity(gamingActivity)
-                .startTime(LocalDateTime.of(2026, 1, 6, 20, 30))
-                .durationMinutes(30L).xpEarned(24.0)
-                .build();
+        // Gaming, split across two hours (130 + 120 = 250), outscores Study's single 200-XP
+        // hour on CATEGORY total even though neither individual Gaming hour beats hour 9 --
+        // this is what makes bestHour (9), bestCategory (GAMING), and bestCategoryHour (21)
+        // three genuinely different values. A fixture where all three coincide (as an earlier
+        // version of this test had) can't catch a bug that drops the category filter from the
+        // bestCategoryHour derivation -- see testGetBestTimeOfDay_bestCategoryHourRequiresCategoryFilter.
         ActivityLog gamingAt21pm = ActivityLog.builder()
+                .id(2L).userId(userId).activity(gamingActivity)
+                .startTime(LocalDateTime.of(2026, 1, 6, 21, 0))
+                .durationMinutes(30L).xpEarned(130.0)
+                .build();
+        ActivityLog gamingAt22pm = ActivityLog.builder()
                 .id(3L).userId(userId).activity(gamingActivity)
-                .startTime(LocalDateTime.of(2026, 1, 7, 21, 0))
-                .durationMinutes(30L).xpEarned(24.0)
+                .startTime(LocalDateTime.of(2026, 1, 7, 22, 0))
+                .durationMinutes(30L).xpEarned(120.0)
                 .build();
 
         when(activityLogRepository.findByUserId(userId))
-                .thenReturn(List.of(studyAt9am, gamingAt20pm, gamingAt21pm));
+                .thenReturn(List.of(studyAt9am, gamingAt21pm, gamingAt22pm));
 
         ResponseEntity<BestTimeOfDayResponse> response = analyticsService.getBestTimeOfDay(userId, userId);
 
@@ -289,15 +293,83 @@ public class AnalyticsServiceImplTest {
         assertEquals(200.0, body.hourlyBreakdown().get(9).totalXpEarned());
         assertEquals(60L, body.hourlyBreakdown().get(9).totalDurationMinutes());
         assertEquals(1L, body.hourlyBreakdown().get(9).totalSessions());
-        assertEquals(24.0, body.hourlyBreakdown().get(20).totalXpEarned());
-        assertEquals(24.0, body.hourlyBreakdown().get(21).totalXpEarned());
+        assertEquals(130.0, body.hourlyBreakdown().get(21).totalXpEarned());
+        assertEquals(120.0, body.hourlyBreakdown().get(22).totalXpEarned());
         // An hour with no logs is present (zero-filled), not absent.
         assertEquals(0.0, body.hourlyBreakdown().get(0).totalXpEarned());
         assertEquals(0L, body.hourlyBreakdown().get(0).totalSessions());
 
+        // Three deliberately different values: 200 (hour 9) beats either single Gaming hour, but
+        // Gaming's 130+120=250 category total beats Study's 200, and within Gaming, 21 (130) beats
+        // 22 (120).
         assertEquals(9, body.bestHour());
-        assertEquals(Category.STUDY, body.bestCategory());
-        assertEquals(9, body.bestCategoryHour());
+        assertEquals(Category.GAMING, body.bestCategory());
+        assertEquals(21, body.bestCategoryHour());
+    }
+
+    // #103 review: the original fixture had bestCategoryHour == bestHour == 9 for every category,
+    // so deleting the "&& category == bestCategory" filter from the derivation (collapsing it into
+    // a duplicate of bestHour, and destroying the "hour Y WITHIN category X" semantics the feature
+    // exists for) still passed. This fixture only passes if that filter is actually applied: Study
+    // has more total XP than Gaming, so bestCategory=STUDY, but Study's own peak hour (9, at 50 XP)
+    // is not the same as Gaming's peak hour (14, at 90 XP) -- if bestCategoryHour were derived from
+    // the unfiltered hourlyBreakdown instead of Study-only logs, it would wrongly report 14.
+    @Test
+    @DisplayName("getBestTimeOfDay (#72) bestCategoryHour is scoped to bestCategory's own logs, not the overall peak hour")
+    void testGetBestTimeOfDay_bestCategoryHourRequiresCategoryFilter() {
+        Long userId = 1L;
+
+        ActivityLog studyAt9am = ActivityLog.builder()
+                .id(1L).userId(userId).activity(studyActivity)
+                .startTime(LocalDateTime.of(2026, 1, 5, 9, 0))
+                .durationMinutes(30L).xpEarned(50.0)
+                .build();
+        ActivityLog studyAt10am = ActivityLog.builder()
+                .id(2L).userId(userId).activity(studyActivity)
+                .startTime(LocalDateTime.of(2026, 1, 6, 10, 0))
+                .durationMinutes(30L).xpEarned(45.0)
+                .build();
+        // Gaming's single session outscores either individual Study hour, but not Study's total.
+        ActivityLog gamingAt2pm = ActivityLog.builder()
+                .id(3L).userId(userId).activity(gamingActivity)
+                .startTime(LocalDateTime.of(2026, 1, 7, 14, 0))
+                .durationMinutes(30L).xpEarned(90.0)
+                .build();
+
+        when(activityLogRepository.findByUserId(userId))
+                .thenReturn(List.of(studyAt9am, studyAt10am, gamingAt2pm));
+
+        BestTimeOfDayResponse body = analyticsService.getBestTimeOfDay(userId, userId).getBody();
+
+        assertNotNull(body);
+        assertEquals(14, body.bestHour()); // Gaming's single 90-XP hour beats either Study hour alone
+        assertEquals(Category.STUDY, body.bestCategory()); // but Study's 50+45=95 beats Gaming's 90
+        assertEquals(9, body.bestCategoryHour()); // Study's OWN peak hour (50 > 45), not hour 14
+    }
+
+    // #103 review: bestHour is filtered against > 0.0, but bestCategory/bestCategoryHour
+    // previously were not -- a user whose logs all earn 0.0 XP got bestHour=null alongside a
+    // non-null bestCategory/bestCategoryHour, a self-contradictory payload. All three must go
+    // null together.
+    @Test
+    @DisplayName("getBestTimeOfDay (#72) returns null for all three bests when every log earns 0.0 XP")
+    void testGetBestTimeOfDay_allZeroXp_returnsNullBests() {
+        Long userId = 1L;
+        ActivityLog zeroXpLog = ActivityLog.builder()
+                .id(1L).userId(userId).activity(studyActivity)
+                .startTime(LocalDateTime.of(2026, 1, 5, 9, 0))
+                .durationMinutes(0L).xpEarned(0.0)
+                .build();
+
+        when(activityLogRepository.findByUserId(userId)).thenReturn(List.of(zeroXpLog));
+
+        BestTimeOfDayResponse body = analyticsService.getBestTimeOfDay(userId, userId).getBody();
+
+        assertNotNull(body);
+        assertEquals(24, body.hourlyBreakdown().size());
+        assertNull(body.bestHour());
+        assertNull(body.bestCategory());
+        assertNull(body.bestCategoryHour());
     }
 
     @Test
