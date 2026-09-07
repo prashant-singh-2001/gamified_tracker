@@ -11,8 +11,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -41,7 +43,7 @@ class ActivityLoggedListenerTest {
         listener.onActivityLogged(event);
 
         InOrder inOrder = inOrder(processedEventRepository, levelTrackerService);
-        inOrder.verify(processedEventRepository).save(argThat(pe -> "42".equals(pe.getIdempotencyKey())));
+        inOrder.verify(processedEventRepository).saveAndFlush(argThat(pe -> "42".equals(pe.getIdempotencyKey())));
         inOrder.verify(levelTrackerService).save(eq(1L), any(LevelTrackerRequestDTO.class));
 
         ArgumentCaptor<LevelTrackerRequestDTO> captor = ArgumentCaptor.forClass(LevelTrackerRequestDTO.class);
@@ -58,7 +60,21 @@ class ActivityLoggedListenerTest {
 
         listener.onActivityLogged(event);
 
-        verify(processedEventRepository, never()).save(any());
+        verify(processedEventRepository, never()).saveAndFlush(any());
+        verify(levelTrackerService, never()).save(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("issue #82: a racing duplicate that loses existsById still can't apply XP -- the "
+            + "guard insert throwing must stop the method before levelTrackerService.save runs")
+    void onActivityLogged_guardInsertThrows_xpNeverApplied() {
+        ActivityLoggedEvent event = new ActivityLoggedEvent(42L, 1L, 2L, 30.0);
+        when(processedEventRepository.existsById("42")).thenReturn(false);
+        when(processedEventRepository.saveAndFlush(any()))
+                .thenThrow(new DataIntegrityViolationException("duplicate key"));
+
+        assertThrows(DataIntegrityViolationException.class, () -> listener.onActivityLogged(event));
+
         verify(levelTrackerService, never()).save(anyLong(), any());
     }
 }
