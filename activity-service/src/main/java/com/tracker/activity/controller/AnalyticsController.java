@@ -1,5 +1,6 @@
 package com.tracker.activity.controller;
 
+import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
 import com.tracker.activity.dto.WeeklyReportResponse;
@@ -26,7 +27,7 @@ public class AnalyticsController {
         this.analyticsService = analyticsService;
     }
 
-    // #88: ownership enforced against the trusted header inside the service (all three
+    // #88: ownership enforced against the trusted header inside the service (all four
     // endpoints below share the same guard -- see AnalyticsServiceImpl.requireSelf).
     @GetMapping("/user/{userId}/category-summary")
     public ResponseEntity<List<CategorySummaryResponse>> getCategorySummary(@RequestHeader("userId") Long callerUserId,
@@ -46,5 +47,14 @@ public class AnalyticsController {
     public ResponseEntity<WeeklyReportResponse> getWeeklyReport(@RequestHeader("userId") Long callerUserId,
                                                                  @PathVariable Long userId) {
         return analyticsService.getWeeklyReport(callerUserId, userId);
+    }
+
+    // Issue #72: "best time of day" -- an aggregate GROUP BY hour_of_day, not a model (see the
+    // issue's own "analytics, not ML" title). Folded into this controller per the issue's own
+    // recommendation rather than shipped as a standalone feature.
+    @GetMapping("/user/{userId}/best-time-of-day")
+    public ResponseEntity<BestTimeOfDayResponse> getBestTimeOfDay(@RequestHeader("userId") Long callerUserId,
+                                                                   @PathVariable Long userId) {
+        return analyticsService.getBestTimeOfDay(callerUserId, userId);
     }
 }

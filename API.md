@@ -326,8 +326,22 @@ design writeup, including the in-memory-aggregation trade-off and known gaps.
 | `GET` | `/api/activitylog/analytics/user/{userId}/category-summary` | authenticated, **owner-only (#88)** | totals per `Category`: `totalDurationMinutes`, `totalXpEarned`, `totalSessions`. `{userId}` must be the caller's own or `403` |
 | `GET` | `/api/activitylog/analytics/user/{userId}/xp-over-time?days=7` | authenticated, **owner-only (#88)** | one `{date, totalXpEarned, totalDurationMinutes}` entry per day in the window, **zero-filled** — always returns exactly `days` entries regardless of how many have logs |
 | `GET` | `/api/activitylog/analytics/user/{userId}/weekly-report` | authenticated, **owner-only (#88)** | `currentWeekXp`, `previousWeekXp`, `percentageChange` (`100.0` if the previous week was `0` and this week isn't, `0.0` if both are `0`), `totalActiveMinutes`, `topCategory` (`null` if the week has no logs), `dailyBreakdown` (7 zero-filled entries for the current week) |
+| `GET` | `/api/activitylog/analytics/user/{userId}/best-time-of-day` | authenticated, **owner-only** | issue #72 — "analytics, not ML": a `GROUP BY hour_of_day` over all-time logs, not a rolling window. See below |
 
-All three were previously open reads (`{userId}` could be anyone) — fixed alongside #76–80.
+The first three were previously open reads (`{userId}` could be anyone) — fixed alongside #76–80.
+`best-time-of-day` shipped after that fix and reuses the same guard from day one.
+
+**`GET .../best-time-of-day` response:**
+| Field | Type | Notes |
+|---|---|---|
+| `hourlyBreakdown` | array | 24 entries, one per hour `0`–`23`, **zero-filled** (same convention as `xp-over-time`) — each `{hour, totalDurationMinutes, totalXpEarned, totalSessions}` |
+| `bestHour` | Integer \| null | the hour with the most XP across all categories combined; `null` if the user has no XP at all (no logs, or logs that all earn `0.0` XP) |
+| `bestCategory` | String enum \| null | resolved the same way `weekly-report`'s `topCategory` is (`groupingBy` + `summingDouble` + `max`), over all-time logs instead of one week |
+| `bestCategoryHour` | Integer \| null | the peak hour **within** `bestCategory` only, scoped to that category's own logs — the "hour Y" half of "you log the most XP in category X around hour Y" |
+
+`bestHour`, `bestCategory`, and `bestCategoryHour` are **null as a set, never independently** —
+`bestCategory`/`bestCategoryHour` are only computed when `bestHour` is non-null, so a response never
+pairs a `null` `bestHour` with a non-null `bestCategory`.
 
 ---
 
@@ -422,10 +436,11 @@ Issue #70. Parses one free-text sentence into a draft `ActivityLogRequest` — *
 
 ### Analytics
 
-All three below are **owner-only (#88)** — each reads the caller's id from the required `userId`
-request header and rejects a `{userId}` mismatch with `403`, same trust-boundary caveat as
-`POST /activitylog/` above when called directly against `:8081`. Previously unguarded — any caller
-could read any `{userId}`'s analytics.
+All four below are **owner-only** (the first three since #88, `best-time-of-day` from day one) —
+each reads the caller's id from the required `userId` request header and rejects a `{userId}`
+mismatch with `403`, same trust-boundary caveat as `POST /activitylog/` above when called directly
+against `:8081`. The first three were previously unguarded — any caller could read any `{userId}`'s
+analytics.
 
 #### `GET /activitylog/analytics/user/{userId}/category-summary`
 Aggregates activity logs for a user grouped by category (`STUDY`, `WORK`, `GAMING`, `CHORES`, `HEALTH`, `OTHER`). Returns JSON array containing `category`, `totalDurationMinutes`, `totalXpEarned`, and `totalSessions`.
@@ -435,6 +450,9 @@ Calculates daily XP earned and total active minutes for the specified window (de
 
 #### `GET /activitylog/analytics/user/{userId}/weekly-report`
 Generates a comprehensive weekly report comparing current week vs previous week XP, percentage change, total active minutes, top category, and a 7-day daily breakdown.
+
+#### `GET /activitylog/analytics/user/{userId}/best-time-of-day`
+Issue #72. Groups all-time logs by hour of day (`0`–`23`, zero-filled). Returns `hourlyBreakdown` plus three derived fields — `bestHour`, `bestCategory`, `bestCategoryHour` — same shape as the Gateway's `GET /api/activitylog/analytics/user/{userId}/best-time-of-day` above.
 
 ### AI Weekly Coaching Digest
 
