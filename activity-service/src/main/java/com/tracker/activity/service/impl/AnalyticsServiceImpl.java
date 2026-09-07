@@ -5,6 +5,7 @@ import com.tracker.activity.dao.Category;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
 import com.tracker.activity.dto.WeeklyReportResponse;
+import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.service.AnalyticsService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,7 +31,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     }
 
     @Override
-    public ResponseEntity<List<CategorySummaryResponse>> getCategorySummary(Long userId) {
+    public ResponseEntity<List<CategorySummaryResponse>> getCategorySummary(Long callerUserId, Long userId) {
+        requireSelf(callerUserId, userId);
         List<ActivityLog> logs = activityLogRepository.findByUserId(userId);
 
         Map<Category, List<ActivityLog>> grouped = logs.stream()
@@ -60,7 +62,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     }
 
     @Override
-    public ResponseEntity<List<DailyXpResponse>> getXpOverTime(Long userId, int days) {
+    public ResponseEntity<List<DailyXpResponse>> getXpOverTime(Long callerUserId, Long userId, int days) {
+        requireSelf(callerUserId, userId);
         int rangeDays = Math.max(days, 1);
         LocalDate endDate = LocalDate.now();
         LocalDate startDate = endDate.minusDays(rangeDays - 1);
@@ -94,7 +97,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     }
 
     @Override
-    public ResponseEntity<WeeklyReportResponse> getWeeklyReport(Long userId) {
+    public ResponseEntity<WeeklyReportResponse> getWeeklyReport(Long callerUserId, Long userId) {
+        requireSelf(callerUserId, userId);
         LocalDate today = LocalDate.now();
         LocalDate currentWeekStart = today.minusDays(6);
         LocalDate previousWeekStart = currentWeekStart.minusDays(7);
@@ -162,5 +166,13 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         );
 
         return ResponseEntity.ok(report);
+    }
+
+    // #88: shared guard for all three analytics reads -- each is keyed by a userId path
+    // variable with no other object to compare against, so a mismatch is always a 403.
+    private void requireSelf(Long callerUserId, Long userId) {
+        if (!callerUserId.equals(userId)) {
+            throw new OwnershipViolationException("Not permitted to access another user's data");
+        }
     }
 }

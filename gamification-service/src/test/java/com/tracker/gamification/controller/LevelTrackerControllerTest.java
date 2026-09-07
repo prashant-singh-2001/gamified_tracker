@@ -3,6 +3,7 @@ package com.tracker.gamification.controller;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
 import com.tracker.gamification.dto.ManualXpAwardRequest;
+import com.tracker.gamification.exception.OwnershipViolationException;
 import com.tracker.gamification.service.impl.LevelTrackerServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.NoSuchElementException;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.never;
@@ -87,10 +89,10 @@ public class LevelTrackerControllerTest {
                 false
         );
 
-        when(levelTrackerService.findById(anyLong()))
+        when(levelTrackerService.findById(anyLong(), anyLong()))
                 .thenReturn(response);
 
-        mockMvc.perform(get("/level/1").accept(MediaType.APPLICATION_JSON))
+        mockMvc.perform(get("/level/1").header("userId", 1L).accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.userId").value(1L))
                 .andExpect(jsonPath("$.activityId").value(1L))
@@ -99,7 +101,19 @@ public class LevelTrackerControllerTest {
                 .andExpect(jsonPath("$.xpForNextLevel").value(250.0))
                 .andExpect(jsonPath("$.progressPercent").value(50.0));
 
-        verify(levelTrackerService).findById(anyLong());
+        verify(levelTrackerService).findById(anyLong(), anyLong());
+    }
+
+    // #77/#88: a caller asking for someone else's LevelTracker PK must 404, and the real
+    // @RestControllerAdvice must map it -- not just a mocked return value.
+    @Test
+    @DisplayName("GET /level/{id} is 404 when the tracker belongs to a different user (#77/#88)")
+    void testGetLevelTrackerById_notFoundForOtherUser() throws Exception {
+        when(levelTrackerService.findById(1L, 1L))
+                .thenThrow(new NoSuchElementException("LevelTracker with id: 1 not found"));
+
+        mockMvc.perform(get("/level/1").header("userId", 1L).accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -204,17 +218,34 @@ public class LevelTrackerControllerTest {
                 false
         );
 
-        when(levelTrackerService.findByUserId(anyLong()))
+        when(levelTrackerService.findByUserId(anyLong(), anyLong()))
                 .thenReturn(List.of(response1, response2));
 
-        mockMvc.perform(get("/level/user/1").accept(MediaType.APPLICATION_JSON))
+        mockMvc.perform(get("/level/user/1").header("userId", 1L).accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].userId").value(1L))
                 .andExpect(jsonPath("$[0].activityId").value(1L))
                 .andExpect(jsonPath("$[1].userId").value(1L))
                 .andExpect(jsonPath("$[1].activityId").value(2L));
 
-        verify(levelTrackerService).findByUserId(anyLong());
+        verify(levelTrackerService).findByUserId(anyLong(), anyLong());
+    }
+
+    // #76/#88: a caller asking for someone else's tracker rows must 403, and the real
+    // @RestControllerAdvice must map it -- not just a mocked return value.
+    @Test
+    @DisplayName("GET /level/user/{userId} is 403 for another user's data (#76/#88)")
+    void testGetLevelTrackerByUserId_forbiddenForOtherUser() throws Exception {
+        Long callerUserId = 1L;
+        Long otherUsersId = 2L;
+
+        when(levelTrackerService.findByUserId(callerUserId, otherUsersId))
+                .thenThrow(new OwnershipViolationException("Not permitted to access another user's data"));
+
+        mockMvc.perform(get("/level/user/{userId}", otherUsersId)
+                        .header("userId", callerUserId)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
     }
 
     @Test

@@ -8,7 +8,9 @@ import org.springframework.http.ResponseEntity;
 import java.util.List;
 
 public interface AnalyticsService {
-    ResponseEntity<List<CategorySummaryResponse>> getCategorySummary(Long userId);
-    ResponseEntity<List<DailyXpResponse>> getXpOverTime(Long userId, int days);
-    ResponseEntity<WeeklyReportResponse> getWeeklyReport(Long userId);
+    // #88: callerUserId is the trusted header identity; userId is the path subject being
+    // requested. Throws OwnershipViolationException when they differ.
+    ResponseEntity<List<CategorySummaryResponse>> getCategorySummary(Long callerUserId, Long userId);
+    ResponseEntity<List<DailyXpResponse>> getXpOverTime(Long callerUserId, Long userId, int days);
+    ResponseEntity<WeeklyReportResponse> getWeeklyReport(Long callerUserId, Long userId);
 }

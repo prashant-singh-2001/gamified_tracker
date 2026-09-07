@@ -47,7 +47,9 @@ Authorization: Bearer <token>
 
 Tokens are signed HS256 JWTs and carry the user's `role` as a claim. The signing secret and expiry both come from config (`jwt.secret` / `jwt.expiration`, see `.env` / `JWT_SECRET` / `JWT_EXPIRATION`).
 
-`SecurityConfig` configures the OAuth2 Resource Server, validates JWTs via the configured `JwtDecoder`, and uses a `JwtAuthenticationConverter` to derive Spring Security authorities from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level**, e.g. `.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")` — three such matchers exist today (`POST /api/activity`, `/api/activitylog/review/**`, `POST /api/level`). An `ADMIN` token succeeds on all three; any other role receives `403 Forbidden`. **The only way to obtain an `ADMIN` token is via an out-of-band-provisioned account** — `POST /auth/register` always assigns `Role.USER` regardless of what the client sends (see `AdminBootstrap` under Auth below).
+`SecurityConfig` configures the OAuth2 Resource Server, validates JWTs via the configured `JwtDecoder`, and uses a `JwtAuthenticationConverter` to derive Spring Security authorities from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level**, e.g. `.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")` — seven such matchers exist today (`POST /api/activity`, `/api/activitylog/review/**`, `POST /api/level`, `POST /api/threshold`, `POST /api/ranks/recompute`, `GET /api/level`, `GET /api/level/activity/**`). An `ADMIN` token succeeds on all seven; any other role receives `403 Forbidden`. **The only way to obtain an `ADMIN` token is via an out-of-band-provisioned account** — `POST /auth/register` always assigns `Role.USER` regardless of what the client sends (see `AdminBootstrap` under Auth below).
+
+**Per-resource ownership on reads (#76–80, #88) is a separate, second layer**, enforced downstream in `activity-service`/`gamification-service` against the same trusted `userId` header rather than at the Gateway — see the "owner-only" notes on individual endpoints below.
 
 **Caller identity on writes:** the JWT also carries a `userId` claim (the numeric `User.id`, set at register/login). `UserIdHeaderFilter` reads it and injects a trusted `userId` HTTP header on the request before it is routed downstream — overwriting/normalizing any `userId` header the client sent, so it can't be spoofed. `POST /api/activitylog` derives the acting user entirely from this trusted header; `POST /api/level` uses it to identify the **acting admin** (for the audit trail) while the XP **target** user is a separate, explicit field in the body (see that endpoint below) — neither body ever accepts a raw `userId` field.
 
@@ -148,9 +150,9 @@ Create an activity. **Requires `ADMIN` role** — a non-admin token gets `403`.
 ### Activity Log
 
 #### `GET /api/activitylog/{id}`
-Fetch one activity log by its numeric id. Requires auth. **Open read by design** — any authenticated user can look up any log by id, not just their own (players can view each other's activity/stats; this is a social feature, not an oversight).
+Fetch one activity log by its numeric id. Requires auth. **Owner-only (#78/#88).** The log's owner is compared against the caller's `userId` header; a log belonging to someone else 404s exactly like a nonexistent id — a `403` here would confirm the id exists to someone with no business knowing that. (This endpoint was previously documented as an intentional open read across users; that was the still-live #78 vulnerability, not a real design decision — it's fixed now.)
 
-**Response:** `200 OK` (shape below) or `404` if not found. `bonusApplied`/`bonusMultiplier`/`leveledUp` are always defaulted here, not the real historical values — see the note under `GET /api/activitylog/user/{id}` below.
+**Response:** `200 OK` (shape below) or `404` if not found *or owned by someone else*. `bonusApplied`/`bonusMultiplier`/`leveledUp` are always defaulted here, not the real historical values — see the note under `GET /api/activitylog/user/{id}` below.
 
 ---
 
@@ -224,9 +226,24 @@ Has its own `natural-log.enabled` feature flag, but shares the same `spring.ai.m
 ---
 
 #### `GET /api/activitylog/user/{id}`
-List all activity logs for a user. Requires auth. **Open read by design** — `{id}` can be any user, not just the caller (see note above).
+List all activity logs for a user. Requires auth. **Owner-only (#79/#88)** — `{id}` must equal the caller's `userId` header, or the response is `403` (the subject is already named in the URL, so a 403 leaks nothing a 404 would also require explaining). Same fix, same rationale as `GET /api/activitylog/streaks/user/{id}` below and the three `GET /api/activitylog/analytics/user/{userId}/*` endpoints under [Analytics](#analytics) — all four were unguarded before #88.
 
-**Response:** `200 OK`, JSON array of the same shape as the `POST` response above — **except** `bonusApplied`, `bonusMultiplier` are always `false`/`1.0` here (and on `GET /api/activitylog/{id}`), regardless of what actually happened when the log was created. Those two fields aren't persisted columns; they're only populated on the `POST` response itself, from the in-memory roll. `leveledUp` is `false` everywhere, including on the `POST` response itself now — see the note above.
+**Response:** `200 OK`, JSON array of the same shape as the `POST` response above — **except** `bonusApplied`, `bonusMultiplier` are always `false`/`1.0` here (and on `GET /api/activitylog/{id}`), regardless of what actually happened when the log was created. Those two fields aren't persisted columns; they're only populated on the `POST` response itself, from the in-memory roll. `leveledUp` is `false` everywhere, including on the `POST` response itself now — see the note above. `403` `ProblemDetail` if `{id}` isn't the caller's own.
+
+---
+
+#### `GET /api/activitylog/streaks/user/{id}`
+List every `(activity, streak)` pair for a user. Requires auth. **Owner-only (#80/#88)** — same rule and same rationale as `GET /api/activitylog/user/{id}` above.
+
+**Response:** `200 OK`, JSON array:
+| Field | Type | Notes |
+|---|---|---|
+| `activityId` | Long | |
+| `currentStreak` | int | consecutive days logged, mutated in place — see [Streaks](docs/features/streaks.md) |
+| `longestStreak` | int | high-water mark, never decreases |
+| `lastActivityDate` | ISO-8601 date | |
+
+`403` `ProblemDetail` if `{id}` isn't the caller's own.
 
 ---
 
@@ -250,13 +267,18 @@ Both `POST` endpoints return the updated `ActivityLogResponse` (`200 OK`), or `4
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/level` | authenticated | list every level-tracker row (all users, all activities) — open read |
-| `GET` | `/api/level/{id}` | authenticated | one row by internal id (`404` if missing) — open read, any user's row |
+| `GET` | `/api/level` | **ADMIN** | list every level-tracker row (all users, all activities). ADMIN-gated (#88) — every user's rows, no single subject to compare against the caller |
+| `GET` | `/api/level/{id}` | authenticated, **owner-only (#77/#88)** | one row by internal id — `404` if missing *or owned by someone else* (a `403` would confirm the id exists to someone with no business knowing that) |
 | `POST` | `/api/level` | **ADMIN** | manually award XP to an activity, recalculating level. See below — not a general-purpose write, and not what the normal activity-logging flow uses |
-| `GET` | `/api/level/user/{userId}` | authenticated | all rows for a given user — open read, `{userId}` can be anyone. **This is where the real, eventual `leveledUp` outcome of a `POST /api/activitylog` becomes visible**, shortly after the async XP application completes |
-| `GET` | `/api/level/activity/{activityId}` | authenticated | all rows for a given activity |
+| `GET` | `/api/level/user/{userId}` | authenticated, **owner-only (#76/#88)** | all rows for a given user — `{userId}` must be the caller's own or the response is `403`. **This is where the real, eventual `leveledUp` outcome of a `POST /api/activitylog` becomes visible**, shortly after the async XP application completes |
+| `GET` | `/api/level/activity/{activityId}` | **ADMIN** | all rows for a given activity, across every user. ADMIN-gated (#88), same reasoning as `GET /api/level` — `GET /api/leaderboard/activity/{id}` is the public per-activity view |
 
-All reads here are **intentionally open** — any authenticated player can view any other player's level/XP stats (see [Authentication](#authentication) and [Gamification Service § Level Tracker](#level-tracker-1)).
+Two of these five are **self-service reads** — a caller only ever sees their own rows, enforced in
+`gamification-service` against the trusted `userId` header, not at the Gateway (#76/#77/#88; these
+were previously undocumented open reads across users — that was the still-live #76/#77
+vulnerability, not a real design decision). The other two are genuinely cross-user (every row, or
+every row for one activity, with no single subject to check) and are ADMIN-gated at the Gateway
+instead, the same way `POST /api/level` already was.
 
 **`POST /api/level` used to be a public, unbounded XP mint — fixed in issue #74.** Before the fix, any authenticated user could call it with an arbitrary `activityId`/`xp` and grant themselves unlimited XP, bypassing activity-service, the outbox, and the idempotency guard entirely. It's now:
 - **Gated `hasRole("ADMIN")`** at the Gateway — a non-admin token gets `403`.
@@ -301,9 +323,11 @@ design writeup, including the in-memory-aggregation trade-off and known gaps.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/activitylog/analytics/user/{userId}/category-summary` | authenticated | totals per `Category`: `totalDurationMinutes`, `totalXpEarned`, `totalSessions`. Open read — `{userId}` can be anyone |
-| `GET` | `/api/activitylog/analytics/user/{userId}/xp-over-time?days=7` | authenticated | one `{date, totalXpEarned, totalDurationMinutes}` entry per day in the window, **zero-filled** — always returns exactly `days` entries regardless of how many have logs |
-| `GET` | `/api/activitylog/analytics/user/{userId}/weekly-report` | authenticated | `currentWeekXp`, `previousWeekXp`, `percentageChange` (`100.0` if the previous week was `0` and this week isn't, `0.0` if both are `0`), `totalActiveMinutes`, `topCategory` (`null` if the week has no logs), `dailyBreakdown` (7 zero-filled entries for the current week) |
+| `GET` | `/api/activitylog/analytics/user/{userId}/category-summary` | authenticated, **owner-only (#88)** | totals per `Category`: `totalDurationMinutes`, `totalXpEarned`, `totalSessions`. `{userId}` must be the caller's own or `403` |
+| `GET` | `/api/activitylog/analytics/user/{userId}/xp-over-time?days=7` | authenticated, **owner-only (#88)** | one `{date, totalXpEarned, totalDurationMinutes}` entry per day in the window, **zero-filled** — always returns exactly `days` entries regardless of how many have logs |
+| `GET` | `/api/activitylog/analytics/user/{userId}/weekly-report` | authenticated, **owner-only (#88)** | `currentWeekXp`, `previousWeekXp`, `percentageChange` (`100.0` if the previous week was `0` and this week isn't, `0.0` if both are `0`), `totalActiveMinutes`, `topCategory` (`null` if the week has no logs), `dailyBreakdown` (7 zero-filled entries for the current week) |
+
+All three were previously open reads (`{userId}` could be anyone) — fixed alongside #76–80.
 
 ---
 
@@ -382,18 +406,26 @@ Fetch one activity by name. `200 OK` with the activity, or `404` `ProblemDetail`
 Create an activity. Same request/response shape as the Gateway's `POST /api/activity` (no role check at this layer — that's Gateway-only).
 
 #### `GET /activitylog/{id}`
-Fetch one activity log by id. `200 OK` or `404` `ProblemDetail` (`"Activity log not found: {id}"`).
+Fetch one activity log by id. Reads the caller's id from the required `userId` request header (same trust-boundary caveat as `POST /activitylog/` below when called directly against `:8081`) and compares it against the log's owner — **`404`** either way if it doesn't exist or belongs to someone else (**#78/#88**), else `200 OK`.
 
 #### `POST /activitylog/`
 Create an activity log (computes duration + XP bonus, saves the log, and writes an outbox row for async XP application — see [`EVENT_DRIVEN_DECOUPLING.md`](docs/features/event-driven-decoupling.md); no synchronous call to Gamification Service). Same request/response shape as the Gateway's `POST /api/activitylog`, including the now-always-`false` `leveledUp`. `404` `ProblemDetail` if `activityName` doesn't match an existing activity. Reads `userId` from the `userId` request header (required) rather than the body — when called through the Gateway this header is the trusted, JWT-derived value; called directly against `:8081` (bypassing the Gateway, as this dev setup allows), the header is unauthenticated and effectively caller-supplied, since this service has no security layer of its own.
 
 #### `GET /activitylog/user/{id}`
-List all activity logs for a user.
+List all activity logs for a user. **Owner-only (#79/#88)** — `{id}` must equal the caller's `userId` header (required) or the response is `403`, same trust-boundary caveat as `POST /activitylog/` above when called directly against `:8081`.
+
+#### `GET /activitylog/streaks/user/{id}`
+List every `(activityId, currentStreak, longestStreak, lastActivityDate)` row for a user. **Owner-only (#80/#88)**, same rule and trust-boundary caveat as `GET /activitylog/user/{id}` above.
 
 #### `POST /activitylog/natural`
 Issue #70. Parses one free-text sentence into a draft `ActivityLogRequest` — **writes nothing**, same request/response shape as the Gateway's `POST /api/activitylog/natural`. Reads `userId` from the `userId` request header (required), same trust-boundary caveat as `POST /activitylog/` above when called directly against `:8081`.
 
 ### Analytics
+
+All three below are **owner-only (#88)** — each reads the caller's id from the required `userId`
+request header and rejects a `{userId}` mismatch with `403`, same trust-boundary caveat as
+`POST /activitylog/` above when called directly against `:8081`. Previously unguarded — any caller
+could read any `{userId}`'s analytics.
 
 #### `GET /activitylog/analytics/user/{userId}/category-summary`
 Aggregates activity logs for a user grouped by category (`STUDY`, `WORK`, `GAMING`, `CHORES`, `HEALTH`, `OTHER`). Returns JSON array containing `category`, `totalDurationMinutes`, `totalXpEarned`, and `totalSessions`.
@@ -433,7 +465,7 @@ response shapes, just called directly on `:8082` instead of proxied).
 ### Level Tracker
 
 #### `GET /level`
-List every `LevelTracker` row (all users, all activities).
+List every `LevelTracker` row (all users, all activities). **ADMIN-gated at the Gateway only (#88)** — this service has no security layer of its own, so hitting `:8082` directly bypasses that gate entirely, same caveat as everywhere else in this section.
 
 **Response shape** (all endpoints below return this):
 | Field | Type | Notes |
@@ -450,7 +482,7 @@ List every `LevelTracker` row (all users, all activities).
 **Honest gap:** unlike the `level`/`currentLevelXp` fields (which do fall back to the formula-driven default curve for activities with no explicit thresholds — see [Leveling Engine](docs/features/leveling-engine.md)), `xpForNextLevel`/`progressPercent` are resolved from explicit `activity_level_threshold` rows only. An activity running on the default curve has no next-threshold row, so these two report `xpForNextLevel: 0.0, progressPercent: 100.0` even while its level keeps climbing — the progress bar and the level disagree for unseeded activities.
 
 #### `GET /level/{id}`
-Fetch one `LevelTracker` by its internal numeric id. `200 OK` or `404` `ProblemDetail` (`"LevelTracker with id: {id} not found"`).
+Fetch one `LevelTracker` by its internal numeric id. Reads the caller's id from the required `userId` request header (trustworthy through the Gateway; caller-supplied if hit directly on `:8082`, same caveat as `POST /level` below) and compares it against the row's owner — **`404`** either way if it doesn't exist or belongs to someone else (**#77/#88**; a `403` would confirm the id exists to someone with no business knowing that), else `200 OK` with the shape above.
 
 #### `POST /level`
 **Admin-only manual XP award (issue #74)** — `LevelTrackerController.awardXpManually`. Reads the acting admin's id from the `userId` request header (required) — trustworthy through the Gateway, caller-supplied if hit directly on `:8082`, since this service has no security layer of its own (the `hasRole("ADMIN")` gate is Gateway-only; see the caveat on the review endpoints below for the same limitation). Was previously `createLevelTracker`, a public, unbounded write reachable by any authenticated user — see [Concurrency-Safe XP Accumulation](docs/features/concurrency-safe-xp.md) for the fix.
@@ -467,10 +499,10 @@ Fetch one `LevelTracker` by its internal numeric id. `200 OK` or `404` `ProblemD
 **Response:** `200 OK`, the resulting `LevelTrackerDto` (shape above, including the real `leveledUp` value for this call). Level-up logic: crosses the highest `ActivityLevelThreshold` whose `xpRequired` is ≤ the new total XP for that activity; `currentLevelXp` becomes `totalXp − threshold.xpRequired`.
 
 #### `GET /level/user/{userId}`
-List all `LevelTracker` rows for a given user (one per activity they've logged). Open read — no ownership check; any caller can pass any `{userId}`.
+List all `LevelTracker` rows for a given user (one per activity they've logged). **Owner-only (#76/#88)** — reads the caller's id from the required `userId` request header and rejects a mismatch with `403` (same trust caveat as `POST /level`: through the Gateway the header is the JWT's real subject; hit directly on `:8082` a caller supplies it themselves, so this ownership check only means something once the Gateway is the actual entry point). Was previously an open read — any caller could pass any `{userId}` with no check at all.
 
 #### `GET /level/activity/{activityId}`
-List all `LevelTracker` rows for a given activity (one per user who's logged it).
+List all `LevelTracker` rows for a given activity (one per user who's logged it). **ADMIN-gated at the Gateway only (#88)**, same reasoning as `GET /level` above — every user's row for this activity, no single subject to check.
 
 ---
 

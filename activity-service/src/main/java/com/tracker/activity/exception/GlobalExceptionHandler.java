@@ -29,6 +29,13 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
+    // #79/#80/#88: a caller asking for someone else's userId-keyed resource. See
+    // OwnershipViolationException's javadoc for why this is 403, not 404.
+    @ExceptionHandler(OwnershipViolationException.class)
+    public ProblemDetail handleOwnershipViolation(OwnershipViolationException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, ex.getMessage());
+    }
+
     @ExceptionHandler(InactiveActivityException.class)
     public ProblemDetail handleInactiveActivity(InactiveActivityException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());

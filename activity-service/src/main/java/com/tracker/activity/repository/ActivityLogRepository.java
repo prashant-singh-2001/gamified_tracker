@@ -12,10 +12,16 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface ActivityLogRepository extends JpaRepository<ActivityLog, Long> {
     List<ActivityLog> findByUserId(Long userId);
+
+    // #78/#88: ownership-scoped lookup for GET /activitylog/{id} -- a miss here (wrong owner or
+    // no such row) is intentionally indistinguishable from a genuinely missing id, so the handler
+    // renders the same 404 either way instead of leaking existence via a 403.
+    Optional<ActivityLog> findByIdAndUserId(Long id, Long userId);
 
     // Session integrity (#67): per-user duration baseline for the outlier detector.
     // SECURITY: baselineStatuses must only ever be {CLEARED, APPROVED}. Including FLAGGED or

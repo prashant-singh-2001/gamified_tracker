@@ -72,7 +72,7 @@ class InsightsServiceImplTest {
 
         // Neutral defaults for tests that don't care about the exact totals/rows -- lenient()
         // because the delegation-specific tests below stub these explicitly.
-        lenient().when(analyticsService.getWeeklyReport(anyLong())).thenReturn(ResponseEntity.ok(DEFAULT_TOTALS));
+        lenient().when(analyticsService.getWeeklyReport(anyLong(), anyLong())).thenReturn(ResponseEntity.ok(DEFAULT_TOTALS));
         lenient().when(activityLogRepository.findByUserIdAndStartTimeBetween(anyLong(), any(), any()))
                 .thenReturn(List.of());
     }
@@ -182,7 +182,7 @@ class InsightsServiceImplTest {
     void getWeeklyInsights_delegatesHeadlineTotalsToAnalyticsService() {
         WeeklyInsightsResponse response = insightsService.getWeeklyInsights(1L).getBody();
 
-        verify(analyticsService).getWeeklyReport(1L);
+        verify(analyticsService).getWeeklyReport(1L, 1L);
         assertNotNull(response);
         assertSame(DEFAULT_TOTALS, response.totals());
     }

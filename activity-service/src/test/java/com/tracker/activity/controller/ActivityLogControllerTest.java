@@ -8,6 +8,7 @@ import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.DraftStatus;
 import com.tracker.activity.dto.NaturalLogDraftResponse;
 import com.tracker.activity.dto.NaturalLogRequest;
+import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.service.ActivityLogService;
 import com.tracker.activity.service.NaturalLogService;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +25,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -44,6 +46,7 @@ public class ActivityLogControllerTest {
     void testGetActivityLog() {
         //Arrange
         Long id = 1L;
+        Long callerUserId = 2L;
         LocalDateTime now = LocalDateTime.now();
         Activity activity = Activity.builder()
                 .id(id)
@@ -76,10 +79,10 @@ public class ActivityLogControllerTest {
 
         //Act
         ResponseEntity<ActivityLogResponse> expectedResponse = ResponseEntity.ok(response);
-        when(activityLogService.getActivityLogResponseEntity(id)).thenReturn(expectedResponse);
+        when(activityLogService.getActivityLogResponseEntity(callerUserId, id)).thenReturn(expectedResponse);
 
         //Assert
-        ResponseEntity<ActivityLogResponse> actualResponse = activityLogController.getActivityLog(id);
+        ResponseEntity<ActivityLogResponse> actualResponse = activityLogController.getActivityLog(callerUserId, id);
         assertEquals(expectedResponse, actualResponse);
     }
 
@@ -241,13 +244,30 @@ public class ActivityLogControllerTest {
 
         //Act
         ResponseEntity<List<ActivityLogResponse>> expectedResponse = ResponseEntity.ok(List.of(log1, log2, log3));
-        when(activityLogService.getAllActivityForUser(userId)).thenReturn(expectedResponse);
+        when(activityLogService.getAllActivityForUser(userId, userId)).thenReturn(expectedResponse);
 
         //Assert
-        ResponseEntity<List<ActivityLogResponse>> actualResponse = activityLogController.getAllActivityForUser(userId);
+        ResponseEntity<List<ActivityLogResponse>> actualResponse = activityLogController.getAllActivityForUser(userId, userId);
         assertEquals(expectedResponse, actualResponse);
         assertNotNull(actualResponse.getBody());
         assertEquals(3, actualResponse.getBody().size());
+    }
+
+    // #79/#88: the controller must forward the header identity and the path subject as two
+    // distinct arguments, in the right order -- a swap here would silently defeat the ownership
+    // check that lives in the service. This test uses two different values specifically so a
+    // swap (or a controller that drops one of them) would fail the stubbing/verification below.
+    @Test
+    @DisplayName("Test getAllActivityForUser forwards the caller header separately from the path userId (#79/#88)")
+    void testGetAllActivityForUser_forwardsCallerAndPathIdSeparately() {
+        Long callerUserId = 1L;
+        Long otherUsersId = 2L;
+
+        when(activityLogService.getAllActivityForUser(callerUserId, otherUsersId))
+                .thenThrow(new OwnershipViolationException("Not permitted to access another user's data"));
+
+        assertThrows(OwnershipViolationException.class,
+                () -> activityLogController.getAllActivityForUser(callerUserId, otherUsersId));
     }
 
     @Test

@@ -17,6 +17,7 @@ import com.tracker.activity.exception.ActivityNotFoundException;
 import com.tracker.activity.exception.ImplausibleSessionException;
 import com.tracker.activity.exception.InactiveActivityException;
 import com.tracker.activity.exception.InvalidTimeRangeException;
+import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.outbox.OutboxEvent;
 import com.tracker.activity.outbox.OutboxEventRepository;
 import com.tracker.activity.repository.ActivityLogRepository;
@@ -63,8 +64,10 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     private final ActivityNameResolutionService activityNameResolutionService;
 
     @Override
-    public ResponseEntity<ActivityLogResponse> getActivityLogResponseEntity(Long id) {
-        var activityLog = activityLogRepository.findById(id)
+    public ResponseEntity<ActivityLogResponse> getActivityLogResponseEntity(Long callerUserId, Long id) {
+        // #78/#88: findByIdAndUserId makes "exists but belongs to someone else" and "doesn't
+        // exist" render as the exact same 404 -- no enumeration signal either way.
+        var activityLog = activityLogRepository.findByIdAndUserId(id, callerUserId)
                 .orElseThrow(() -> new ActivityNotFoundException("Activity log not found: " + id));
 
         // historical logs don't have bonus/leveled flags stored yet — return defaults
@@ -210,7 +213,11 @@ public class ActivityLogServiceImpl implements ActivityLogService {
     }
 
     @Override
-    public ResponseEntity<List<StreakResponse>> getStreaksForUser(Long userId) {
+    public ResponseEntity<List<StreakResponse>> getStreaksForUser(Long callerUserId, Long userId) {
+        // #80/#88: the subject is already named in the path, so a 403 on mismatch leaks nothing.
+        if (!callerUserId.equals(userId)) {
+            throw new OwnershipViolationException("Not permitted to access another user's data");
+        }
         var streaks = activityStreakRepository.findByUserId(userId).stream().map(
                 s -> new StreakResponse(s.getActivityId(), s.getCurrentStreak(), s.getLongestStreak(), s.getLastActivityDate())
         ).toList();
@@ -225,7 +232,12 @@ public class ActivityLogServiceImpl implements ActivityLogService {
         }
     }
 
-    public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(Long id) {
+    @Override
+    public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(Long callerUserId, Long id) {
+        // #79/#88: the subject is already named in the path, so a 403 on mismatch leaks nothing.
+        if (!callerUserId.equals(id)) {
+            throw new OwnershipViolationException("Not permitted to access another user's data");
+        }
         var activityLogList = activityLogRepository.findByUserId(id);
 
         var activityLogResponses = activityLogList.stream().map(a -> mapToActivityLogResponse(a, false, 1.0, false, 0, 1.0, null)).toList();

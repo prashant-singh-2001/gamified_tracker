@@ -19,6 +19,11 @@ public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long
 
     Optional<LevelTracker> findByUserIdAndActivityId(Long userId, Long activityId);
 
+    // #77/#88: ownership-scoped lookup for GET /level/{id} -- a miss here (wrong owner or no
+    // such row) is intentionally indistinguishable from a genuinely missing id, so the handler
+    // renders the same 404 either way instead of leaking existence via a 403.
+    Optional<LevelTracker> findByIdAndUserId(Long id, Long userId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT l FROM LevelTracker l WHERE l.userId = :userId AND l.activityId = :activityId")
     Optional<LevelTracker> findByUserIdAndActivityIdForUpdate(@Param("userId") Long userId,

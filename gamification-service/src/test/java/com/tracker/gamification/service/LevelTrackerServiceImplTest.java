@@ -10,6 +10,7 @@ import com.tracker.gamification.domain.LevelCurve;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
 import com.tracker.gamification.dto.ManualXpAwardRequest;
+import com.tracker.gamification.exception.OwnershipViolationException;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
@@ -183,7 +184,7 @@ public class LevelTrackerServiceImplTest {
                 .thenReturn(List.of(tracker1, tracker2));
 
         // Act
-        List<LevelTrackerDto> results = levelTrackerService.findByUserId(userId);
+        List<LevelTrackerDto> results = levelTrackerService.findByUserId(userId, userId);
 
         // Assert
         assertNotNull(results);
@@ -203,12 +204,22 @@ public class LevelTrackerServiceImplTest {
         when(levelTrackerRepository.findAllByUserId(userId)).thenReturn(List.of());
 
         // Act
-        List<LevelTrackerDto> results = levelTrackerService.findByUserId(userId);
+        List<LevelTrackerDto> results = levelTrackerService.findByUserId(userId, userId);
 
         // Assert
         assertNotNull(results);
         assertTrue(results.isEmpty());
         verify(levelTrackerRepository).findAllByUserId(userId);
+    }
+
+    // #76/#88: the caller asking for someone else's userId gets a 403, and the repository is
+    // never even queried -- the guard must short-circuit before any data access.
+    @Test
+    @DisplayName("findByUserId rejects a caller asking for another user's trackers (#76/#88)")
+    void testFindByUserId_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> levelTrackerService.findByUserId(1L, 2L));
+        verifyNoInteractions(levelTrackerRepository);
     }
 
     @Test
@@ -314,10 +325,10 @@ public class LevelTrackerServiceImplTest {
                 .currentLevelXp(150.0)
                 .build();
 
-        when(levelTrackerRepository.findById(id)).thenReturn(Optional.of(tracker));
+        when(levelTrackerRepository.findByIdAndUserId(id, 1L)).thenReturn(Optional.of(tracker));
 
         // Act
-        LevelTrackerDto result = levelTrackerService.findById(id);
+        LevelTrackerDto result = levelTrackerService.findById(1L, id);
 
         // Assert
         assertNotNull(result);
@@ -325,7 +336,7 @@ public class LevelTrackerServiceImplTest {
         assertEquals(1L, result.activityId());
         assertEquals(3, result.level());
         assertEquals(300.0, result.totalXp());
-        verify(levelTrackerRepository).findById(id);
+        verify(levelTrackerRepository).findByIdAndUserId(id, 1L);
     }
 
     @Test
@@ -333,14 +344,29 @@ public class LevelTrackerServiceImplTest {
     void testFindByIdNotFound() {
         // Arrange
         Long id = 99L;
-        when(levelTrackerRepository.findById(id)).thenReturn(Optional.empty());
+        when(levelTrackerRepository.findByIdAndUserId(id, 1L)).thenReturn(Optional.empty());
 
         // Act & Assert
         assertThrows(
                 java.util.NoSuchElementException.class,
-                () -> levelTrackerService.findById(id)
+                () -> levelTrackerService.findById(1L, id)
         );
-        verify(levelTrackerRepository).findById(id);
+        verify(levelTrackerRepository).findByIdAndUserId(id, 1L);
+    }
+
+    // #77/#88: a tracker that exists but belongs to someone else must 404 identically to a
+    // genuinely missing id -- no 403, no distinguishing signal. Pinned separately from
+    // testFindByIdNotFound to guard against the service ever falling back to a bare findById.
+    @Test
+    @DisplayName("findById 404s identically when the tracker belongs to a different user (#77/#88)")
+    void testFindById_notFoundWhenOwnedBySomeoneElse() {
+        Long id = 1L;
+        Long callerUserId = 999L;
+        when(levelTrackerRepository.findByIdAndUserId(id, callerUserId)).thenReturn(Optional.empty());
+
+        assertThrows(java.util.NoSuchElementException.class,
+                () -> levelTrackerService.findById(callerUserId, id));
+        verify(levelTrackerRepository, never()).findById(anyLong());
     }
 
     @Test
@@ -586,12 +612,12 @@ public class LevelTrackerServiceImplTest {
         ActivityLevelThresholdId nextId = ActivityLevelThresholdId.builder().activityId(1L).level(4).build();
         ActivityLevelThreshold next = ActivityLevelThreshold.builder().id(nextId).xpRequired(1000.0).build();
 
-        when(levelTrackerRepository.findById(id)).thenReturn(Optional.of(tracker));
+        when(levelTrackerRepository.findByIdAndUserId(id, 1L)).thenReturn(Optional.of(tracker));
         when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(640.0), any(Pageable.class)))
                 .thenReturn(List.of(next));
 
         // Act
-        LevelTrackerDto result = levelTrackerService.findById(id);
+        LevelTrackerDto result = levelTrackerService.findById(1L, id);
 
         // Assert
         assertEquals(360.0, result.xpForNextLevel());
@@ -608,12 +634,12 @@ public class LevelTrackerServiceImplTest {
                 .level(10).totalXp(50000.0).currentLevelXp(1000.0)
                 .build();
 
-        when(levelTrackerRepository.findById(id)).thenReturn(Optional.of(tracker));
+        when(levelTrackerRepository.findByIdAndUserId(id, 1L)).thenReturn(Optional.of(tracker));
         when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(50000.0), any(Pageable.class)))
                 .thenReturn(List.of());
 
         // Act
-        LevelTrackerDto result = levelTrackerService.findById(id);
+        LevelTrackerDto result = levelTrackerService.findById(1L, id);
 
         // Assert
         assertEquals(0.0, result.xpForNextLevel());
@@ -634,7 +660,7 @@ public class LevelTrackerServiceImplTest {
         when(activityLevelThresholdRepository.findAllForActivities(anyCollection())).thenReturn(List.of());
 
         // Act
-        List<LevelTrackerDto> results = levelTrackerService.findByUserId(userId);
+        List<LevelTrackerDto> results = levelTrackerService.findByUserId(userId, userId);
 
         // Assert — batched lookup called exactly once; the per-row lookup is never used on this path
         assertEquals(2, results.size());

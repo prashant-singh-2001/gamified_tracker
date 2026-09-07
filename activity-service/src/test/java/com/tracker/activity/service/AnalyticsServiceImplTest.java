@@ -6,6 +6,7 @@ import com.tracker.activity.dao.Category;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
 import com.tracker.activity.dto.WeeklyReportResponse;
+import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.service.impl.AnalyticsServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,8 +24,10 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -97,7 +100,7 @@ public class AnalyticsServiceImplTest {
 
         when(activityLogRepository.findByUserId(userId)).thenReturn(List.of(log1, log2, log3));
 
-        ResponseEntity<List<CategorySummaryResponse>> response = analyticsService.getCategorySummary(userId);
+        ResponseEntity<List<CategorySummaryResponse>> response = analyticsService.getCategorySummary(userId, userId);
 
         assertNotNull(response.getBody());
         assertEquals(2, response.getBody().size());
@@ -131,7 +134,7 @@ public class AnalyticsServiceImplTest {
         when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(userId), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(List.of(logToday));
 
-        ResponseEntity<List<DailyXpResponse>> response = analyticsService.getXpOverTime(userId, 7);
+        ResponseEntity<List<DailyXpResponse>> response = analyticsService.getXpOverTime(userId, userId, 7);
 
         assertNotNull(response.getBody());
         assertEquals(7, response.getBody().size());
@@ -173,7 +176,7 @@ public class AnalyticsServiceImplTest {
         when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(userId), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(List.of(currentLog, prevLog));
 
-        ResponseEntity<WeeklyReportResponse> response = analyticsService.getWeeklyReport(userId);
+        ResponseEntity<WeeklyReportResponse> response = analyticsService.getWeeklyReport(userId, userId);
 
         assertNotNull(response.getBody());
         WeeklyReportResponse report = response.getBody();
@@ -204,9 +207,36 @@ public class AnalyticsServiceImplTest {
         when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(userId), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(List.of(currentLog));
 
-        ResponseEntity<WeeklyReportResponse> response = analyticsService.getWeeklyReport(userId);
+        ResponseEntity<WeeklyReportResponse> response = analyticsService.getWeeklyReport(userId, userId);
 
         assertNotNull(response.getBody());
         assertEquals(100.0, response.getBody().percentageChange());
+    }
+
+    // #88: all three analytics reads are keyed by a userId path variable with no other object to
+    // compare against, so a caller/subject mismatch is always a 403 -- pinned once per method,
+    // and each one must short-circuit before touching the repository.
+    @Test
+    @DisplayName("getCategorySummary rejects a caller asking for another user's analytics (#88)")
+    void testGetCategorySummary_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> analyticsService.getCategorySummary(1L, 2L));
+        verifyNoInteractions(activityLogRepository);
+    }
+
+    @Test
+    @DisplayName("getXpOverTime rejects a caller asking for another user's analytics (#88)")
+    void testGetXpOverTime_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> analyticsService.getXpOverTime(1L, 2L, 7));
+        verifyNoInteractions(activityLogRepository);
+    }
+
+    @Test
+    @DisplayName("getWeeklyReport rejects a caller asking for another user's analytics (#88)")
+    void testGetWeeklyReport_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> analyticsService.getWeeklyReport(1L, 2L));
+        verifyNoInteractions(activityLogRepository);
     }
 }

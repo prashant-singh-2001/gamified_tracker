@@ -11,6 +11,7 @@ import com.tracker.gamification.domain.LevelProgress;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
 import com.tracker.gamification.dto.ManualXpAwardRequest;
+import com.tracker.gamification.exception.OwnershipViolationException;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
@@ -44,7 +45,11 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final ManualXpAwardRepository manualXpAwardRepository;
 
     @Override
-    public List<LevelTrackerDto> findByUserId(Long userId) {
+    public List<LevelTrackerDto> findByUserId(Long callerUserId, Long userId) {
+        // #76/#88: the subject is already named in the path, so a 403 on mismatch leaks nothing.
+        if (!callerUserId.equals(userId)) {
+            throw new OwnershipViolationException("Not permitted to access another user's data");
+        }
         // OLD: return levelTrackerRepository.findAllByUserId(userId).stream().map(this::mapToDto).toList();
         return mapAll(levelTrackerRepository.findAllByUserId(userId));
     }
@@ -62,8 +67,10 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     }
 
     @Override
-    public LevelTrackerDto findById(Long id) {
-        var levelTracker = levelTrackerRepository.findById(id)
+    public LevelTrackerDto findById(Long callerUserId, Long id) {
+        // #77/#88: findByIdAndUserId makes "exists but belongs to someone else" and "doesn't
+        // exist" render as the exact same 404 -- no enumeration signal either way.
+        var levelTracker = levelTrackerRepository.findByIdAndUserId(id, callerUserId)
                 .orElseThrow(() ->
                         new NoSuchElementException(
                                 "LevelTracker with id: " + id + " not found"

@@ -13,10 +13,12 @@ import com.tracker.activity.domain.MatchField;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.ActivitySuggestion;
+import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.exception.ActivityNameUnresolvedException;
 import com.tracker.activity.exception.ActivityNotFoundException;
 import com.tracker.activity.exception.ImplausibleSessionException;
 import com.tracker.activity.exception.InvalidTimeRangeException;
+import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.outbox.OutboxEvent;
 import com.tracker.activity.outbox.OutboxEventRepository;
 import com.tracker.activity.repository.ActivityLogRepository;
@@ -37,6 +39,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -126,22 +129,37 @@ public class ActivityLogServiceImplTest {
                 .createdAt(now)
                 .build();
 
-        when(activityLogRepository.findById(100L)).thenReturn(Optional.of(log));
+        when(activityLogRepository.findByIdAndUserId(100L, 2L)).thenReturn(Optional.of(log));
 
-        ResponseEntity<ActivityLogResponse> resp = activityLogService.getActivityLogResponseEntity(100L);
+        ResponseEntity<ActivityLogResponse> resp = activityLogService.getActivityLogResponseEntity(2L, 100L);
 
         assertNotNull(resp);
         assertEquals(100L, resp.getBody().id());
         assertEquals(2L, resp.getBody().userId());
-        verify(activityLogRepository).findById(100L);
+        verify(activityLogRepository).findByIdAndUserId(100L, 2L);
     }
 
     @Test
     @DisplayName("getActivityLogResponseEntity throws when missing")
     void testGetActivityLogResponseEntityNotFound() {
-        when(activityLogRepository.findById(50L)).thenReturn(Optional.empty());
+        when(activityLogRepository.findByIdAndUserId(50L, 2L)).thenReturn(Optional.empty());
 
-        assertThrows(ActivityNotFoundException.class, () -> activityLogService.getActivityLogResponseEntity(50L));
+        assertThrows(ActivityNotFoundException.class, () -> activityLogService.getActivityLogResponseEntity(2L, 50L));
+    }
+
+    // #78/#88: a log that exists but belongs to someone else must 404 exactly like a genuinely
+    // missing id -- no 403, no distinguishing signal. The repository call itself (scoped by
+    // caller id) is what makes this true; this test pins that the service never falls back to
+    // a bare findById.
+    @Test
+    @DisplayName("getActivityLogResponseEntity 404s identically when the log belongs to a different user (#78/#88)")
+    void testGetActivityLogResponseEntity_notFoundWhenOwnedBySomeoneElse() {
+        Long callerUserId = 999L;
+        when(activityLogRepository.findByIdAndUserId(100L, callerUserId)).thenReturn(Optional.empty());
+
+        assertThrows(ActivityNotFoundException.class,
+                () -> activityLogService.getActivityLogResponseEntity(callerUserId, 100L));
+        verify(activityLogRepository, never()).findById(anyLong());
     }
 
     @Test
@@ -296,11 +314,46 @@ public class ActivityLogServiceImplTest {
 
         when(activityLogRepository.findByUserId(2L)).thenReturn(List.of(l1, l2));
 
-        ResponseEntity<List<ActivityLogResponse>> resp = activityLogService.getAllActivityForUser(2L);
+        ResponseEntity<List<ActivityLogResponse>> resp = activityLogService.getAllActivityForUser(2L, 2L);
 
         assertNotNull(resp);
         assertEquals(2, resp.getBody().size());
         verify(activityLogRepository).findByUserId(2L);
+    }
+
+    // #79/#88: the caller asking for someone else's userId gets a 403, and the repository is
+    // never even queried -- the guard must short-circuit before any data access.
+    @Test
+    @DisplayName("getAllActivityForUser rejects a caller asking for another user's logs (#79/#88)")
+    void testGetAllActivityForUser_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> activityLogService.getAllActivityForUser(1L, 2L));
+        verifyNoInteractions(activityLogRepository);
+    }
+
+    @Test
+    @DisplayName("getStreaksForUser returns mapped list")
+    void testGetStreaksForUser() {
+        ActivityStreak s1 = ActivityStreak.builder().userId(2L).activityId(1L).currentStreak(3).longestStreak(5).lastActivityDate(LocalDate.now()).build();
+
+        when(activityStreakRepository.findByUserId(2L)).thenReturn(List.of(s1));
+
+        ResponseEntity<List<StreakResponse>> resp = activityLogService.getStreaksForUser(2L, 2L);
+
+        assertNotNull(resp);
+        assertEquals(1, resp.getBody().size());
+        assertEquals(1L, resp.getBody().get(0).activityId());
+        verify(activityStreakRepository).findByUserId(2L);
+    }
+
+    // #80/#88: same shape as #79 -- a caller asking for someone else's streaks gets a 403
+    // before the repository is ever queried.
+    @Test
+    @DisplayName("getStreaksForUser rejects a caller asking for another user's streaks (#80/#88)")
+    void testGetStreaksForUser_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> activityLogService.getStreaksForUser(1L, 2L));
+        verifyNoInteractions(activityStreakRepository);
     }
 
     @Test
