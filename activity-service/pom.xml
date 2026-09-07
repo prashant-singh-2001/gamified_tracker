@@ -115,6 +115,16 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Distributed lock for OutboxRelay's @Scheduled poller across multiple instances (issue #82) -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+        </dependency>
+
         <!-- AI weekly digest (issue #65). Two interchangeable local backends, picked by
              spring.ai.model.chat at runtime; both starters ship, neither is active by default.
              openai = any OpenAI-compatible server: Docker Model Runner, vLLM, LocalAI, llama.cpp. -->
