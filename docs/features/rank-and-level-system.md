@@ -171,6 +171,9 @@ curl http://localhost:8080/api/ranks -H "Authorization: Bearer $TOKEN"
   `/leaderboard/me`) is an earlier, simpler leaderboard that computes rankings live per request straight
   off `LevelTrackerRepository` — no snapshot, no tiers. It still exists and is still tested, but this
   `UserRank`-snapshot system is the one this doc covers and the one worth reading first.
+- The recompute job's `@Scheduled` trigger is now `@SchedulerLock`-guarded (issue #82), so multiple
+  gamification-service instances don't all rebuild this snapshot on the same tick — see
+  [Distributed Scheduler Locking](distributed-scheduler-locking.md).
 
 ---
 _Verified against the working tree on 2026-07-22; snippets are illustrative — confirm against source
