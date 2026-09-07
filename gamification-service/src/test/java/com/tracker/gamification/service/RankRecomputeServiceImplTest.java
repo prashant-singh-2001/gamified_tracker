@@ -4,6 +4,7 @@ import com.tracker.gamification.dto.UserXpProjection;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.UserRankRepository;
 import com.tracker.gamification.service.impl.RankRecomputeServiceImpl;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -11,10 +12,13 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -115,5 +119,17 @@ public class RankRecomputeServiceImplTest {
         verify(userRankRepository, times(2)).upsert(any(), anyDouble(), anyInt(), eq("FOOTHILL"), anyDouble(), anyInt(), eq(20));
         verify(userRankRepository, times(2)).upsert(any(), anyDouble(), anyInt(), eq("TRAILHEAD"), anyDouble(), anyInt(), eq(20));
         verify(userRankRepository, times(1)).upsert(any(), anyDouble(), anyInt(), eq("BASECAMP"), anyDouble(), anyInt(), eq(20));
+    }
+
+    @Test
+    @DisplayName("issue #82: recompute carries @SchedulerLock with a non-empty name, so a future "
+            + "refactor can't silently drop cross-instance locking")
+    void recompute_isGuardedBySchedulerLock() throws NoSuchMethodException {
+        Method method = RankRecomputeServiceImpl.class.getDeclaredMethod("recompute");
+
+        SchedulerLock lock = method.getAnnotation(SchedulerLock.class);
+
+        assertNotNull(lock, "recompute must stay annotated with @SchedulerLock");
+        assertFalse(lock.name().isBlank(), "SchedulerLock name must be set");
     }
 }

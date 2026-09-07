@@ -2,6 +2,7 @@ package com.tracker.activity.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tracker.contracts.event.ActivityLoggedEvent;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -11,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -89,5 +91,17 @@ class OutboxRelayTest {
         relay.publishPending();
 
         verifyNoInteractions(rabbitTemplate);
+    }
+
+    @Test
+    @DisplayName("issue #82: publishPending carries @SchedulerLock with a non-empty name, so a "
+            + "future refactor can't silently drop cross-instance locking")
+    void publishPending_isGuardedBySchedulerLock() throws NoSuchMethodException {
+        Method method = OutboxRelay.class.getDeclaredMethod("publishPending");
+
+        SchedulerLock lock = method.getAnnotation(SchedulerLock.class);
+
+        assertNotNull(lock, "publishPending must stay annotated with @SchedulerLock");
+        assertFalse(lock.name().isBlank(), "SchedulerLock name must be set");
     }
 }
