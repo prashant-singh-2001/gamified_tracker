@@ -262,6 +262,12 @@ whether it's synchronous on this path at all — anything on `POST /activitylog`
   threshold alone — deliberately out of scope here.
 - **`findAll()` per miss** is O(catalog size) and fine at this scale (an admin-curated table, tens of
   rows) — the first thing to change if the catalog ever grows past a few hundred.
+- **This `findAll()` call is deliberately untouched by issue #84**, which made `GET /api/activity`
+  and `GET /api/activity/{name}` hide soft-deleted activities. Those two reads now use a new
+  `findByNameAndActiveTrue`/`findAllByActiveTrue` pair; this miss-path catalog read, and the
+  exact-match `findByName` at the top of the diagram, both keep using the original unfiltered
+  methods on purpose — the whole "top match active?" gate above only has anything to gate on
+  because inactive rows are still in the candidate list it's given.
 
 ## Related
 [Session Integrity](session-integrity.md) (the `outlier-detection-enabled` kill-switch convention this
