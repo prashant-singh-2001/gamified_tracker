@@ -137,6 +137,40 @@ class ActivityNameResolutionServiceTest {
     }
 
     @Test
+    @DisplayName("#84: an inactive catalog row is still passed to the matcher as a candidate, and "
+            + "still surfaces on the suggestion list with active=false, even though ActivityServiceImpl's "
+            + "own reads now hide it -- the fuzzy-suggestion carve-out (#7/#66) must survive #84 untouched")
+    void inactiveActivity_stillCandidateAndStillSuggested() {
+        Activity retired = activityFixture(1L, "Retired", "no longer offered", Category.OTHER, false);
+        when(activityRepository.findAll()).thenReturn(List.of(retired));
+
+        ActivityCandidate retiredCandidate = new ActivityCandidate("Retired", "no longer offered", "OTHER", false);
+        ActivityMatch topMatch = new ActivityMatch(retiredCandidate, 0.95, MatchField.NAME);
+        // Mirrors what the REAL ActivityMatcher does for this exact situation (Rail 1,
+        // ActivityMatcher.java) -- a top match above the auto-resolve threshold that is inactive
+        // never gets auto-resolved onto; it degrades to a suggestion instead.
+        when(activityMatcher.resolve(eq("Retird"), any()))
+                .thenReturn(new ActivityMatcher.Resolution(null, List.of(topMatch), ActivityMatcher.Reason.INACTIVE_TOP_MATCH));
+
+        ActivityNameResolutionService.NameResolution result = resolutionService.resolve("Retird");
+
+        assertFalse(result.resolved());
+        assertNull(result.activity());
+        assertEquals(ActivityMatcher.Reason.INACTIVE_TOP_MATCH, result.reason());
+        assertEquals(1, result.suggestions().size());
+        assertEquals("Retired", result.suggestions().get(0).name());
+        assertFalse(result.suggestions().get(0).active());
+
+        // And the candidate list the catalog read fed to the matcher included the inactive row --
+        // proving this service's own findAll() usage was NOT touched by #84's read-side filtering.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ActivityCandidate>> captor = ArgumentCaptor.forClass(List.class);
+        verify(activityMatcher).resolve(eq("Retird"), captor.capture());
+        assertEquals(1, captor.getValue().size());
+        assertFalse(captor.getValue().get(0).active());
+    }
+
+    @Test
     @DisplayName("an empty catalog still calls the matcher, with an empty candidate list")
     void emptyCatalog_stillCallsMatcherWithEmptyList() {
         when(activityRepository.findAll()).thenReturn(List.of());

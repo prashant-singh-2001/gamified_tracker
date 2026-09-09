@@ -108,7 +108,9 @@ Exchanges a refresh token for a new access/refresh token pair — rotation with 
 ### Activity
 
 #### `GET /api/activity`
-List all activities. Requires auth (any role).
+List all **active** activities. Requires auth (any role). A soft-deleted (`active: false`)
+activity is never included (issue #84) — the catalog listing only ever shows the same set an
+authenticated user could actually log time against.
 
 **Response:** `200 OK`, JSON array of:
 | Field | Type |
@@ -116,17 +118,21 @@ List all activities. Requires auth (any role).
 | `name` | String |
 | `category` | enum: `STUDY`, `WORK`, `GAMING`, `CHORES`, `HEALTH`, `OTHER` |
 | `xpMultiplier` | double — the **effective** multiplier (per-activity override, else the category base) |
-| `active` | boolean |
+| `active` | boolean — always `true` here, since inactive activities are filtered out entirely |
 | `description` | String |
 | `createdAt` | ISO-8601 datetime string |
 
 ---
 
 #### `GET /api/activity/{name}`
-Fetch one activity by name. Requires auth (any role).
+Fetch one active activity by name. Requires auth (any role).
 
 - `200 OK` — same shape as above (single object)
-- `404` `ProblemDetail` — not found
+- `404` `ProblemDetail` — not found **or soft-deleted** (issue #84). The two are deliberately
+  indistinguishable from this response alone — an inactive activity is logically gone, not merely
+  hidden, so this endpoint never leaks whether a matching-but-disabled row exists. Contrast with
+  `POST /api/activitylog` below, which *does* distinguish the two (`409` vs `404`) because it needs
+  to tell a caller "re-enable it" rather than "create it."
 
 ---
 
@@ -139,7 +145,7 @@ Create an activity. **Requires `ADMIN` role** — a non-admin token gets `403`.
 | `name` | String | should be unique (enforced at the DB level) |
 | `category` | enum: `STUDY`\|`WORK`\|`GAMING`\|`CHORES`\|`HEALTH`\|`OTHER` | |
 | `xpMultiplier` | double | **optional per-activity override.** `≤ 0` or omitted → the activity's `Category` base multiplier applies (`STUDY`/`WORK` 1.5, `HEALTH` 1.3, `OTHER` 1.0, `CHORES` 0.8, `GAMING` 0.5). A positive value overrides that base. e.g. `1.5` |
-| `active` | boolean | |
+| `active` | boolean | optional, **defaults to `true` if omitted** (issue #84) — there is no `PUT`/`PATCH`/`DELETE` for activities, so an activity created with `active: false` (or, before this fix, one created by simply omitting the field) is invisible to both catalog reads above and can never be recovered through the API |
 | `description` | String | optional |
 | `createdAt` | ISO-8601 datetime string | accepted but **ignored** — the server always sets `createdAt` to the current time |
 

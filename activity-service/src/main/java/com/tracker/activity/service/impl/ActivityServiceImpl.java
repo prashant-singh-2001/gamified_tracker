@@ -23,7 +23,12 @@ public class ActivityServiceImpl implements ActivityService {
 
     @Override
     public ResponseEntity<ActivityResponseRecord> getActivity(String name) {
-        var activity = activityRepository.findByName(name)
+        // #84: an inactive activity is indistinguishable from a missing one on a read -- that's
+        // what "logically invisible" means for a soft delete, and it avoids leaking catalog
+        // existence. Do NOT switch this to findByName + an isActive() check; the whole point is
+        // that findByName stays unfiltered for the other consumers that depend on it (see
+        // ActivityRepository).
+        var activity = activityRepository.findByNameAndActiveTrue(name)
                 .orElseThrow(() -> new ActivityNotFoundException("Activity not found: " + name));
 
         return ResponseEntity.ok(mapToResponse(activity));
@@ -44,7 +49,10 @@ public class ActivityServiceImpl implements ActivityService {
                 .category(activityRequest.category())
                 .description(activityRequest.description())
                 .xpMultiplier(activityRequest.xpMultiplier())
-                .active(activityRequest.active())
+                // #84: active is now Boolean, not boolean -- omitting the field from the request
+                // JSON must mean "active" (the ordinary case), not "silently create an invisible
+                // activity nobody can ever see again" (no PUT/PATCH/DELETE exists to fix it).
+                .active(activityRequest.active() == null || activityRequest.active())
                 .createdAt(LocalDateTime.now())
                 .build();
     }
@@ -64,7 +72,9 @@ public class ActivityServiceImpl implements ActivityService {
 
     @Override
     public ResponseEntity<List<ActivityResponseRecord>> getAllActivities() {
-        var activities = activityRepository.findAll()
+        // #84: same reasoning as getActivity above -- inactive activities are logically deleted,
+        // so the catalog listing must not include them.
+        var activities = activityRepository.findAllByActiveTrue()
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
