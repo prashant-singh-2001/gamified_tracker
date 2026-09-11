@@ -119,6 +119,12 @@ the other missing half — this doc calls it out rather than leaving it implicit
 own convention of documenting known gaps instead of hiding them (see the "leveled up fires on every
 save" and "no small-population gate" notes in [Rank & Level System](rank-and-level-system.md)).
 
+This same gap is why issue #85's performance-index fix left `user_achievement` alone: with
+`evaluateAndAward` unwired, `findByUserIdOrderByUnlockedAtDesc` has no caller to serve, and the
+existing `uk_user_achievement` unique constraint already indexes `user_id` as its leading column —
+there was nothing real to index. Wiring the trigger above would make that read live and worth
+revisiting.
+
 ## Config
 
 No config keys. Seed data lives in `V2__insert_data.sql` (idempotent — safe on every restart). No
