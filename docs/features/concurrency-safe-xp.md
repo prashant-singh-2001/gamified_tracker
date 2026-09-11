@@ -129,6 +129,11 @@ new row in a separate table (its own surrogate PK), so history accumulates rathe
 overwritten; `LevelTrackerArchiveRepository.findByUserIdAndActivityIdOrderByArchivedAtDesc` reads it
 back newest-first.
 
+That finder has zero callers anywhere in the codebase — which is exactly why `level_tracker_archive`
+was deliberately left off the index list in issue #85's fix (`V6__create_gamification_indexes.sql`).
+This table is written on every non-first XP award, the hottest write path in the service; indexing
+it would be pure write cost for a read nothing currently performs.
+
 ## Config
 
 None external — this is pure JPA/Postgres locking semantics. Requires the shared `tracker_db`

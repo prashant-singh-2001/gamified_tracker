@@ -17,6 +17,8 @@ import java.util.Optional;
 @Repository
 public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long> {
 
+    // #85: user-scoped lookups (this one, findAllByUserId, getTotalXpByUserId below) ride the
+    // leading user_id column of uk_level_tracker_user_activity -- no separate index needed.
     Optional<LevelTracker> findByUserIdAndActivityId(Long userId, Long activityId);
 
     // #77/#88: ownership-scoped lookup for GET /level/{id} -- a miss here (wrong owner or no
@@ -32,6 +34,9 @@ public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long
 
     List<LevelTracker> findAllByUserId(Long userId);
 
+    // #85: activity_id ALONE, unlike the userId-scoped finders above -- uk_level_tracker_user_activity
+    // can't serve this, activity_id is its trailing column, not leading. Backed by
+    // idx_level_tracker_activity_id (V6). Same story for findActivityRanking below.
     List<LevelTracker> findAllByActivityId(Long activityId);
 
     @Query("""
@@ -64,6 +69,8 @@ public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long
             GROUP BY l.userId
             ORDER BY l.totalXp DESC
             """)
+    // #85: WHERE l.activityId = :activityId -- served by idx_level_tracker_activity_id, see
+    // findAllByActivityId above.
     List<UserXpProjection> findActivityRanking(@Param("activityId") Long activityId, Pageable pageable);
 
     @Query(value = """
