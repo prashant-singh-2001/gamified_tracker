@@ -14,6 +14,10 @@ import java.util.Optional;
 public interface UserRankRepository extends JpaRepository<UserRank, Long> {
     Optional<UserRank> findByUserId(Long userId);
 
+    // #85: both queries below are tier-scoped against a table that carried only its user_id
+    // primary key. countByTier is called once PER TIER (9x) by RankServiceImpl.getDistribution --
+    // that fanout is exactly what idx_user_rank_tier_total_xp (V6) exists to stop from being 9
+    // full scans on every GET /ranks request.
     List<UserRank> findByTierOrderByTotalXpDesc(RankTier tier, Pageable pageable);
 
     long countByTier(RankTier tier);
