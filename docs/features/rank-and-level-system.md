@@ -20,6 +20,12 @@ authoritative percentile→tier table (`RankTier`), and writes the result into a
 (`UserRank`) that every read endpoint serves directly — O(1) for a personal card, O(page) for a
 leaderboard.
 
+That O(page) claim depends on `idx_user_rank_tier_total_xp` (`V6__create_gamification_indexes.sql`,
+issue #85) — `user_rank` originally carried only its `user_id` primary key, so
+`findByTierOrderByTotalXpDesc` (the tier leaderboard) and `countByTier` both scanned the whole table.
+`countByTier` is the sharper case: `RankServiceImpl.getDistribution` calls it once **per tier** —
+nine tiers, nine full scans — on every single `GET /ranks` request before this index existed.
+
 ## How it works
 
 ```mermaid

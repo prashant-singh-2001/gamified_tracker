@@ -98,6 +98,11 @@ public interface LevelUpEventRepository extends JpaRepository<LevelUpEvent, Long
 `event.getUserId().equals(callerId)` — the ownership constraint is baked directly into the query, so
 there's no way to accidentally skip it.
 
+The other three finders share a `userId`-first shape too, which is exactly what `idx_level_up_event_user_created`
+(`V6__create_gamification_indexes.sql`, issue #85) indexes — `level_up_event` shipped with no
+secondary index at all, so the feed, the unread feed, and the unread badge count were each a full
+table scan before this.
+
 ```java
 // NotificationServiceImpl.markRead
 @Transactional
