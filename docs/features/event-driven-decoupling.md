@@ -93,6 +93,7 @@ because nothing downstream has run yet.
 
 ```java
 @Scheduled(fixedDelayString = "${outbox.relay.delay-ms:2000}")
+@SchedulerLock(name = "outboxRelay_publishPending", lockAtMostFor = "PT30S", lockAtLeastFor = "PT1S")
 @Transactional
 public void publishPending() {
     var batch = repository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
@@ -110,6 +111,8 @@ public void publishPending() {
 `publishedAt IS NULL` **is** the queue — no separate pending-message table. A send failure is caught
 per-row so one bad message never blocks the batch, and it's simply retried on the next 2-second
 tick. This makes delivery **at-least-once**, which is exactly why the consumer has to be idempotent.
+`@SchedulerLock` (issue #82) is what makes "one poller" true with N running instances of
+activity-service — see [Distributed Scheduler Locking](distributed-scheduler-locking.md).
 
 ### 3. Idempotent consumer — dedup-before-apply, not dedup-after
 
@@ -123,7 +126,7 @@ public void onActivityLogged(ActivityLoggedEvent event) {
         return;
     }
 
-    processedEventRepository.save(new ProcessedEvent(key, LocalDateTime.now()));  // guard FIRST
+    processedEventRepository.saveAndFlush(new ProcessedEvent(key, LocalDateTime.now()));  // guard FIRST
 
     levelTrackerService.save(event.userId(),
             new LevelTrackerRequestDTO(event.activityId(), event.xpEarned()));
@@ -131,13 +134,23 @@ public void onActivityLogged(ActivityLoggedEvent event) {
 ```
 The subtle part: `processed_event.idempotency_key` is a **unique primary key**, and the guard row is
 saved **before** XP is applied — not after. If two deliveries of the same event race each other, the
-second `save()` throws a constraint violation, which rolls back the *entire* transaction (including
-any XP that would have been applied), the message gets redelivered, and this time `existsById` is
-already `true`. XP is applied **exactly once** despite at-least-once delivery — and it calls the
-**same** `LevelTrackerServiceImpl.save(userId, dto)` that the HTTP `POST /level` endpoint eventually
-reaches too (see [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)), so there's no
-business-logic fork in the XP accumulation itself between the sync and async paths — only in what
-gates and audits the HTTP side on the way in, see below.
+second `saveAndFlush()` throws a constraint violation, which rolls back the *entire* transaction
+(including any XP that would have been applied), the message gets redelivered, and this time
+`existsById` is already `true`. XP is applied **exactly once** despite at-least-once delivery — and
+it calls the **same** `LevelTrackerServiceImpl.save(userId, dto)` that the HTTP `POST /level`
+endpoint eventually reaches too (see [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)), so
+there's no business-logic fork in the XP accumulation itself between the sync and async paths — only
+in what gates and audits the HTTP side on the way in, see below.
+
+**This guard didn't always actually guard anything (issue #82).** `ProcessedEvent` has a manually
+assigned `String @Id` with no `@GeneratedValue`/`@Version`, so Spring Data's default `isNew()`
+(`id == null`) was always `false` — `save()` compiled to `em.merge()`, not `em.persist()`. A racing
+duplicate landed as a silent `UPDATE`, not the constraint violation this section describes, so a
+genuine race applied XP twice with no error anywhere. `ProcessedEvent` now implements
+`Persistable<String>` with `isNew()` hardcoded `true` (correct for a table that is append-only by
+design), forcing a real `persist()`/INSERT, and the call became `saveAndFlush` so that INSERT runs at
+this line instead of at end-of-transaction flush. Full writeup:
+[Distributed Scheduler Locking](distributed-scheduler-locking.md).
 
 ### 4. Dead-letter queue — `RabbitConfig` (gamification side)
 
@@ -260,4 +273,6 @@ messages queue in RabbitMQ and drain once the service comes back.
 
 ## Related
 [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md) (the method both callers converge on) ·
-[Level-Up Notifications](level-up-notifications.md) (where the eventual `leveledUp` surfaces)
+[Level-Up Notifications](level-up-notifications.md) (where the eventual `leveledUp` surfaces) ·
+[Distributed Scheduler Locking](distributed-scheduler-locking.md) (why `OutboxRelay` and the
+idempotency guard above are now safe with multiple activity-service/gamification-service instances)

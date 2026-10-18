@@ -7,6 +7,7 @@ import com.tracker.gamification.repository.UserRankRepository;
 import com.tracker.gamification.service.OverallLevelService;
 import com.tracker.gamification.service.RankRecomputeService;
 import lombok.AllArgsConstructor;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -28,7 +29,14 @@ public class RankRecomputeServiceImpl implements RankRecomputeService {
     @Override
     @Transactional
     @Scheduled(fixedDelayString = "${ranking.recompute-interval-ms:300000}")
-    public int recompute() {
+    // Issue #82: same class of race as OutboxRelay -- with N instances every one would rebuild
+    // the leaderboard on its own 5-minute tick. lockAtMostFor stays under the recompute interval
+    // so a crashed instance's lock never blocks the next legitimate tick. Since @SchedulerLock is
+    // a Spring AOP interceptor on this bean method, it also guards the on-demand
+    // POST /ranks/recompute path (LevelTrackerController -> this same method) -- acceptable, that
+    // endpoint is rare and admin-triggered, and serializing it with the scheduled run is correct.
+    @SchedulerLock(name = "rankRecompute_recompute", lockAtMostFor = "PT4M", lockAtLeastFor = "PT5S")
+    public Integer recompute() {
         List<UserXpProjection> ranking = levelTrackerRepository.findAllUserTotals();
         int totalUsers = ranking.size();
 

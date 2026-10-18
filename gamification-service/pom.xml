@@ -92,6 +92,17 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Distributed lock for RankRecomputeServiceImpl's @Scheduled recompute across multiple
+             instances (issue #82) -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>

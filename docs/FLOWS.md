@@ -332,10 +332,12 @@ sequenceDiagram
 
 ### 8. Outbox relay
 
-`@Scheduled(fixedDelayString = "${outbox.relay.delay-ms:2000}")` (`OutboxRelay.java:37`) — batches
-up to 100 unpublished rows oldest-first, publishes each, stamps `publishedAt` **only on success**
-(`OutboxRelay.java:39-51`). A publish failure leaves the row `NULL` for the next tick — at-least-once
-delivery, not exactly-once; exactly-once is enforced downstream at step 10.
+`@Scheduled(fixedDelayString = "${outbox.relay.delay-ms:2000}")` (`OutboxRelay.java:37`), guarded by
+`@SchedulerLock` (`OutboxRelay.java:41`, issue #82 — with N instances, every one would otherwise
+poll and publish the same rows) — batches up to 100 unpublished rows oldest-first, publishes each,
+stamps `publishedAt` **only on success** (`OutboxRelay.java:44-57`). A publish failure leaves the row
+`NULL` for the next tick — at-least-once delivery, not exactly-once; exactly-once is enforced
+downstream at step 10. → [Distributed Scheduler Locking](features/distributed-scheduler-locking.md).
 
 ### 9. Broker hop
 
@@ -428,11 +430,14 @@ stateDiagram-v2
 
 `@Scheduled(fixedDelayString = "${ranking.recompute-interval-ms:300000}")` (5 min default) or
 on-demand `POST /ranks/recompute` (**no admin guard on this endpoint** — worth noting, not fixed
-here) → `RankRecomputeServiceImpl.recompute` (`RankRecomputeServiceImpl.java:28-59`): reads all
-`level_tracker` totals, dense-ranks ties (equal `totalXp` shares a position), computes
-`topFraction = (position-1)/totalUsers`, maps to a `RankTier` (`RankTier.fromTopFraction`, 9 tiers
-`SUMMIT`→`BASECAMP`), upserts `user_rank`. Fully derived from `level_tracker` — self-heals on the
-next tick if the source data changes. → [Rank & Level System](features/rank-and-level-system.md).
+here) → `RankRecomputeServiceImpl.recompute` (`RankRecomputeServiceImpl.java:28-72`), guarded by
+`@SchedulerLock` (issue #82 — same class of race as the outbox relay above; the lock also covers
+the on-demand path since both go through this same bean method): reads all `level_tracker` totals,
+dense-ranks ties (equal `totalXp` shares a position), computes `topFraction = (position-1)/totalUsers`,
+maps to a `RankTier` (`RankTier.fromTopFraction`, 9 tiers `SUMMIT`→`BASECAMP`), upserts `user_rank`.
+Fully derived from `level_tracker` — self-heals on the next tick if the source data changes. →
+[Rank & Level System](features/rank-and-level-system.md),
+[Distributed Scheduler Locking](features/distributed-scheduler-locking.md).
 
 ### 16. Read flows
 

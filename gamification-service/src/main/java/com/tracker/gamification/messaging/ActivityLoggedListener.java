@@ -40,7 +40,13 @@ public class ActivityLoggedListener {
         // If a racing delivery already inserted this key, THIS save throws and the whole
         // @Transactional method rolls back (XP not applied) -> message redelivered ->
         // existsById now true -> skipped. XP is therefore applied exactly once.
-        processedEventRepository.save(new ProcessedEvent(key, LocalDateTime.now()));
+        //
+        // Issue #82: saveAndFlush (not save) forces the INSERT to hit the DB right here, at this
+        // line, instead of at end-of-transaction flush -- so the guard genuinely runs before the
+        // XP mutation below rather than relying on an unrelated flushAutomatically elsewhere.
+        // ProcessedEvent.isNew() is hardcoded true (see that class), so this is a real INSERT and
+        // a genuine duplicate throws DataIntegrityViolationException here, not a silent UPDATE.
+        processedEventRepository.saveAndFlush(new ProcessedEvent(key, LocalDateTime.now()));
 
         levelTrackerService.save(event.userId(),
                 new LevelTrackerRequestDTO(event.activityId(), event.xpEarned()));

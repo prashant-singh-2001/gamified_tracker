@@ -2,6 +2,7 @@ package com.tracker.activity.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tracker.contracts.event.ActivityLoggedEvent;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -35,6 +36,10 @@ public class OutboxRelay {
     }
 
     @Scheduled(fixedDelayString = "${outbox.relay.delay-ms:2000}")
+    // Issue #82: with N instances, every one polls the same rows unless serialized. lockAtMostFor
+    // exceeds the worst-case tick so a crashed instance's lock still expires; lockAtLeastFor stops
+    // two instances with close clocks from both running inside the same 2s tick.
+    @SchedulerLock(name = "outboxRelay_publishPending", lockAtMostFor = "PT30S", lockAtLeastFor = "PT1S")
     @Transactional
     public void publishPending() {
         var batch = repository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();

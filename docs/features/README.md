@@ -1,6 +1,6 @@
 # Feature Docs — Gamified Tracker
 
-Twenty-one standalone deep-dives into the notable engineering work in this codebase — each one covers
+Twenty-two standalone deep-dives into the notable engineering work in this codebase — each one covers
 what the feature is, why it's worth a second look, how it actually works (with a diagram and the
 load-bearing code), its config, and a way to try it live. Verified against the current source at
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
@@ -25,6 +25,7 @@ award to CI) that links back to the relevant deep-dive below for the *why* behin
 | Doc | What it demonstrates |
 |---|---|
 | [Event-Driven Decoupling](event-driven-decoupling.md) | Transactional Outbox → Polling Publisher → Idempotent Consumer + DLQ, spanning two services, over a wire contract defined once in a shared `contracts` module — the project's headline architecture feature |
+| [Distributed Scheduler Locking](distributed-scheduler-locking.md) | ShedLock on two `@Scheduled` jobs closing a multi-instance duplicate-XP race, plus a second bug the fix uncovered along the way: a manually-assigned JPA `@Id` silently turning a "throws on duplicate" idempotency guard into a silent no-op update |
 
 ## Gamification Engine
 
@@ -72,6 +73,7 @@ award to CI) that links back to the relevant deep-dive below for the *why* behin
 | Gateway routing | api-gateway | `config/RouteConfiguration.java` |
 | Session integrity | activity-service | `domain/DurationOutlierDetector.java`, `service/DurationOutlierEvaluationService.java` |
 | Event-driven decoupling | activity-service, gamification-service, contracts | `service/impl/ActivityLogServiceImpl.java`, `contracts/.../event/ActivityLoggedEvent.java` |
+| Distributed scheduler locking | activity-service, gamification-service | `outbox/OutboxRelay.java`, `service/impl/RankRecomputeServiceImpl.java`, `messaging/ProcessedEvent.java` |
 | Concurrency-safe XP | gamification-service | `service/impl/LevelTrackerServiceImpl.java` |
 | Leveling engine | activity-service, gamification-service | `dao/Activity.java`, `domain/LevelOutcome.java`, `domain/LevelCurve.java` |
 | Level-up notifications | gamification-service | `service/impl/NotificationServiceImpl.java` |
