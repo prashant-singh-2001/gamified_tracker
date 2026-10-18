@@ -15,7 +15,11 @@ public record ActivityRequestRecord(
         Category category,
         @Positive(message = "xpMultiplayer cannot be negative or zero")
         double xpMultiplier,
-        boolean active,
+        // #84: boxed, not primitive -- omitting this field must be distinguishable from an
+        // explicit false, so the service layer can default a missing value to "active" instead
+        // of silently creating an invisible, unrecoverable activity (there is no update/delete
+        // endpoint for activities at all).
+        Boolean active,
         String description,
         LocalDateTime createdAt
 ) {

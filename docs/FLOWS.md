@@ -209,9 +209,24 @@ something any downstream flow below can defend against on its own.
 
 `POST /api/activity` (ADMIN-gated at the gateway, flow 7 step 4) → `ActivityController.addActivity`
 (`ActivityController.java:38-41`) → `ActivityServiceImpl`. `name` is unique (catalog lookup key for
-flow 8's exact-match step); `active` is a soft-delete flag enforced only at log time (flow 8);
-`xpMultiplier` of `0.0`/non-positive means "use the `Category` base rate," resolved by
-`Activity.effectiveXpMultiplier()` — see [Leveling Engine](features/leveling-engine.md).
+flow 8's exact-match step); `active` (issue #84: an omitted field now defaults to `true`, closing a
+create-an-invisible-activity trap) is a soft-delete flag enforced on **both** catalog reads (below)
+**and** at log time (flow 8) — two independent enforcement points, deliberately kept separate
+rather than a single shared query filter, since flow 8's exact-match lookup and the fuzzy-suggestion
+catalog read below both depend on still seeing inactive rows; `xpMultiplier` of `0.0`/non-positive
+means "use the `Category` base rate," resolved by `Activity.effectiveXpMultiplier()` — see
+[Leveling Engine](features/leveling-engine.md).
+
+### 7a. Reading the catalog
+
+`GET /api/activity` / `GET /api/activity/{name}` (any authenticated role) →
+`ActivityServiceImpl.getAllActivities`/`getActivity` → `ActivityRepository.findAllByActiveTrue`/
+`findByNameAndActiveTrue`. A soft-deleted activity is excluded from the list and returns a plain
+`404` from the single-item lookup — indistinguishable from a name that never existed (issue #84).
+This is a **different** repository method than the one flow 8's exact-match step and the
+fuzzy-suggestion catalog read (below) use — those two stay deliberately unfiltered, since they need
+to keep seeing inactive rows (see [error-handling.md](features/error-handling.md) and
+[fuzzy-activity-matching.md](features/fuzzy-activity-matching.md)).
 
 ---
 

@@ -88,6 +88,16 @@ super("Activity '" + activityName + "' is inactive and cannot accept new log ent
 It's thrown in `mapToActivityLog`, **before** any XP, bonus roll, streak update, or outbox row is
 produced (issue #7) — so a rejected log leaves no partial side effects behind.
 
+**A soft-deleted activity now produces two *different* statuses depending on which path hits it —
+by design, not inconsistency (issue #84).** `GET /api/activity/{name}` returns a plain `404`,
+indistinguishable from a name that never existed at all: a catalog *read* has no reason to reveal
+that a disabled row exists, so `ActivityServiceImpl` uses `findByNameAndActiveTrue` and never even
+sees the row to report on. `POST /api/activitylog` still gets the `409` above, because logging
+*needs* to distinguish "that activity never existed" (`404`, go create it) from "that activity
+exists but is disabled" (`409`, re-enable it) — it resolves the activity through the unfiltered
+`findByName`, which is what makes `InactiveActivityException` reachable at all. Same flag, two
+call sites, two deliberately different answers to "what should the client do next."
+
 **Declarative validation.** `MethodArgumentNotValidException` is what `@Valid @RequestBody` throws,
 and the handler flattens every field violation into one detail string rather than returning only the
 first:
