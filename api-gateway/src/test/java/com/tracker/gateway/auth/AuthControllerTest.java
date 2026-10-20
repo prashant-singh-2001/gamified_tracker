@@ -2,6 +2,7 @@ package com.tracker.gateway.auth;
 
 import com.tracker.gateway.config.AuthRateLimitFilter;
 import com.tracker.gateway.dto.AuthResponse;
+import com.tracker.gateway.exception.EmailAlreadyRegisteredException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -14,6 +15,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(AuthController.class)
@@ -79,7 +81,19 @@ public class AuthControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().json("{\"accessToken\":\"new-access-token\",\"refreshToken\":\"new-refresh-token\"}"));
     }
+
+    @Test
+    void testRegisterDuplicateEmailReturns409ProblemDetail() throws Exception {
+        when(authService.register(any())).thenThrow(new EmailAlreadyRegisteredException());
+
+        String json = "{\"firstName\":\"John\",\"lastName\":\"Doe\",\"email\":\"john@example.com\",\"password\":\"pass123\"}";
+
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.title").value("Conflict"))
+                .andExpect(jsonPath("$.detail").value("Email already registered"));
+    }
 }
-
-
-

@@ -67,7 +67,7 @@ Creates a user and returns an access/refresh token pair. Public (no token requir
 |---|---|---|
 | `firstName` | String | |
 | `lastName` | String | |
-| `email` | String | must be unique |
+| `email` | String | must be unique. Trimmed and lower-cased before it is checked or stored, so `Ada@Example.com ` and `ada@example.com` are the same account |
 | `password` | String | hashed with BCrypt before storage |
 
 **No `role` field** — every account created here is `Role.USER`, unconditionally (issue #74; a client-supplied `role` used to be honored, letting any unauthenticated caller self-promote to `ADMIN` on this `permitAll` endpoint). An `ADMIN` account can only be provisioned out-of-band via `AdminBootstrap`, an `ApplicationRunner` gated by `app.admin.bootstrap.enabled` (off by default — see `.env.example`), which creates or promotes the configured email at startup.
@@ -78,6 +78,13 @@ Creates a user and returns an access/refresh token pair. Public (no token requir
 | `accessToken` | String | short-lived JWT — `role`/`userId` claims, send as `Authorization: Bearer <accessToken>` |
 | `refreshToken` | String | opaque, longer-lived; exchange via `POST /auth/refresh` below rather than re-authenticating |
 
+**`409 Conflict`** — `ProblemDetail` with `"detail": "Email already registered"` when the (normalised) email already belongs to an account. This also covers two registrations racing on the same address: exactly one succeeds and the rest get this `409`, never a `500`.
+```json
+{ "type": "about:blank", "title": "Conflict", "status": 409,
+  "detail": "Email already registered", "instance": "/auth/register" }
+```
+Note this does disclose that an address is registered; `/auth/**` is rate limited (`429`) to bound enumeration.
+
 ---
 
 #### `POST /auth/login`
@@ -86,7 +93,7 @@ Authenticates and returns an access/refresh token pair. Public (no token require
 **Request body:**
 | Field | Type |
 |---|---|
-| `email` | String |
+| `email` | String (trimmed and compared case-insensitively, matching how registration stores it) |
 | `password` | String |
 
 **Response:** `200 OK`, JSON `AuthResponse` (same shape as register). `401` `ProblemDetail` (`"Invalid email or password"`) if the user doesn't exist or the password doesn't match — the same message either way, so the error doesn't reveal which one failed.

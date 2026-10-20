@@ -3,6 +3,7 @@ package com.tracker.gateway.auth;
 import com.tracker.gateway.dto.AuthResponse;
 import com.tracker.gateway.dto.LoginRequest;
 import com.tracker.gateway.dto.RegisterRequest;
+import com.tracker.gateway.exception.EmailAlreadyRegisteredException;
 import com.tracker.gateway.exception.InvalidCredentialsException;
 import com.tracker.gateway.repository.UserRepository;
 import com.tracker.gateway.user.RefreshToken;
@@ -15,6 +16,7 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
@@ -113,6 +115,91 @@ class AuthServiceTest {
 
         verify(userRepository).save(userCaptor.capture());
         assertThat(userCaptor.getValue().getRole()).isEqualTo(Role.USER);
+    }
+
+    @Test
+    void shouldRejectDuplicateEmailWith409ExceptionAndNeverSave() {
+        RegisterRequest request = new RegisterRequest("John", "Doe", "john@example.com", "pass123");
+        when(userRepository.existsByEmail("john@example.com")).thenReturn(true);
+
+        assertThrows(EmailAlreadyRegisteredException.class, () -> authService.register(request));
+
+        verify(userRepository, never()).save(any(User.class));
+        verifyNoInteractions(passwordEncoder, jwtUtil, refreshTokenService);
+    }
+
+    @Test
+    void shouldTreatEmailsCaseInsensitivelyAndIgnoreSurroundingWhitespace() {
+        // The same address in a different case, with padding, must hit the SAME lookup key as
+        // the stored one -- RegisterRequest normalises on the way in.
+        RegisterRequest request = new RegisterRequest("John", "Doe", "  John@Example.COM ", "pass123");
+        when(userRepository.existsByEmail("john@example.com")).thenReturn(true);
+
+        assertThrows(EmailAlreadyRegisteredException.class, () -> authService.register(request));
+    }
+
+    @Test
+    void shouldStoreEmailNormalised() {
+        RegisterRequest request = new RegisterRequest("John", "Doe", "  John@Example.COM ", "pass123");
+        when(passwordEncoder.encode(any())).thenReturn("encoded");
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> {
+            User user = invocation.getArgument(0);
+            user.setId(1L);
+            return user;
+        });
+        when(jwtUtil.generateToken(eq("john@example.com"), eq(Role.USER), eq(1L))).thenReturn("access");
+        when(refreshTokenService.generateRefreshToken(any(User.class)))
+                .thenReturn(RefreshToken.builder().token("refresh").user(new User()).build());
+
+        authService.register(request);
+
+        verify(userRepository).save(userCaptor.capture());
+        assertThat(userCaptor.getValue().getEmail()).isEqualTo("john@example.com");
+    }
+
+    @Test
+    void shouldMapLostRaceToConflictWhenEmailNowExists() {
+        // Both registrations passed the pre-check; this one lost at the unique constraint.
+        RegisterRequest request = new RegisterRequest("John", "Doe", "john@example.com", "pass123");
+        when(userRepository.existsByEmail("john@example.com")).thenReturn(false, true);
+        when(passwordEncoder.encode(any())).thenReturn("encoded");
+        when(userRepository.save(any(User.class)))
+                .thenThrow(new DataIntegrityViolationException("uk_user_email"));
+
+        assertThrows(EmailAlreadyRegisteredException.class, () -> authService.register(request));
+
+        verifyNoInteractions(jwtUtil, refreshTokenService);
+    }
+
+    @Test
+    void shouldNotMislabelAnUnrelatedIntegrityFailureAsDuplicateEmail() {
+        // If the email is NOT taken, the violation is something else and must surface as itself
+        // (a 500) rather than a misleading "Email already registered".
+        RegisterRequest request = new RegisterRequest("John", "Doe", "john@example.com", "pass123");
+        when(userRepository.existsByEmail("john@example.com")).thenReturn(false, false);
+        when(passwordEncoder.encode(any())).thenReturn("encoded");
+        when(userRepository.save(any(User.class)))
+                .thenThrow(new DataIntegrityViolationException("some other constraint"));
+
+        assertThrows(DataIntegrityViolationException.class, () -> authService.register(request));
+    }
+
+    @Test
+    void shouldLoginWithEmailInDifferentCaseAndPadding() {
+        LoginRequest request = new LoginRequest("  JOHN@Example.com ", "pass123");
+        User user = new User();
+        user.setId(2L);
+        user.setEmail("john@example.com");
+        user.setPassword("encoded-pass");
+        user.setRole(Role.USER);
+
+        when(userRepository.findByEmail("john@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("pass123", "encoded-pass")).thenReturn(true);
+        when(jwtUtil.generateToken("john@example.com", Role.USER, 2L)).thenReturn("access");
+        when(refreshTokenService.generateRefreshToken(user))
+                .thenReturn(RefreshToken.builder().token("refresh").user(user).build());
+
+        assertThat(authService.login(request).accessToken()).isEqualTo("access");
     }
 
     /**

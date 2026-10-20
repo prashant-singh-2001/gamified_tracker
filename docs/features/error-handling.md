@@ -27,13 +27,14 @@ flowchart TB
     B -->|"MethodArgumentNotValidException<br/>(both services)<br/>InvalidTimeRangeException"| J["400 field violations joined"]
     B -->|"HttpMessageNotReadableException"| E["400 'Invalid request body'"]
     B -->|"InvalidCredentialsException"| F["401 'Invalid email or password' (gateway)"]
+    B -->|"EmailAlreadyRegisteredException"| K["409 'Email already registered' (gateway)"]
     B -->|no match| G["Spring default (falls through)"]
-    C & D & E & F & I & J --> H["reverse-proxied through gateway UNCHANGED"]
+    C & D & E & F & I & J & K --> H["reverse-proxied through gateway UNCHANGED"]
 ```
 
 ### Each service advises on the exceptions it actually throws
 
-**Gateway — one handler, and a security-conscious message:**
+**Gateway — a security-conscious login message, and a clean registration conflict:**
 ```java
 @RestControllerAdvice
 public class GatewayExceptionHandler {
@@ -41,8 +42,18 @@ public class GatewayExceptionHandler {
     public ProblemDetail handleInvalidCredentials(InvalidCredentialsException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, ex.getMessage());
     }
+
+    @ExceptionHandler(EmailAlreadyRegisteredException.class)
+    public ProblemDetail handleEmailAlreadyRegistered(EmailAlreadyRegisteredException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
+    }
 }
 ```
+Registration used to answer a duplicate email with a bare `500` from the unique constraint. It now
+pre-checks the normalised (trimmed, lower-cased) address and, for the race where two requests both
+pass the check, maps the constraint violation back to the same `409` — but only when the email
+really is taken, so an unrelated integrity failure is not mislabelled. The `409` does reveal that an
+address is registered (the explicit contract); the `/auth/**` rate limit bounds enumeration.
 The exception itself hardcodes one message for both failure modes:
 ```java
 public class InvalidCredentialsException extends RuntimeException {
