@@ -280,3 +280,25 @@ curl -i -X POST http://localhost:8080/api/activitylog -H "Authorization: Bearer 
 ## Related
 [Authentication & Identity Propagation](authentication-and-identity.md) (the no-enumeration login) ·
 [API Gateway Routing](api-gateway-routing.md) (byte-for-byte pass-through)
+
+## Error bodies in the OpenAPI spec
+
+Each service publishes `/v3/api-docs`. springdoc cannot infer a `ProblemDetail` from the controllers, so
+without help the spec described only the 200s. `ProblemOpenApiCustomizer` (one per service: activity,
+gamification, gateway) adds:
+
+- a shared **`Problem`** schema (`type`, `title`, `status`, `detail`, `instance`) with the optional extension
+  members documented on it: `errors` (field -> message, validation only) and, in activity-service,
+  `requestedName` / `suggestions` (the 404 for an unknown activity name);
+- named examples under `components.examples` (`ProblemValidation`, `ProblemNotFound`,
+  `ProblemActivityNameNotFound`, `ProblemNameTaken`, `ProblemForbidden`, ...) whose messages are the real ones
+  the handlers produce;
+- responses attached to operations: **by shape** (a body or query/path parameter gets a 400, a path variable
+  a 404) and **by a small table** for outcomes a client must handle specially (409 on a taken name, 403 on
+  another user's data, 401 on login, the unknown-name 404 with suggestions);
+- in the gateway, a separate **`RateLimited`** schema for the `/auth/**` 429, because that body is
+  `{"error": "Too many requests"}` written by `AuthRateLimitFilter`, not a Problem.
+
+A hand-written `@ApiResponse` on an operation always wins over the generated one. When you add an endpoint
+with an error a client must tell apart, add its row to the table (and an example if the shape is new). A row
+for an endpoint that does not exist is ignored. `OpenApiErrorExamplesTest` in each service pins the result.
