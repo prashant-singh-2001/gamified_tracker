@@ -141,6 +141,14 @@ Note this means Postgres-specific SQL (the `ON CONFLICT` upsert in
 [concurrency-safe XP](concurrency-safe-xp.md)) isn't exercised by the H2 slices — its behavior is
 verified at the service layer with mocks and, historically, a live concurrent-burst test.
 
+**Real Postgres, where it matters.** gamification-service has one Testcontainers slice,
+`PostgresNativeQueriesTest` (`postgres:15`, the compose image). It runs the real Flyway migrations into the
+`gamification` schema, lets Hibernate `validate` the entities against them, and drives every native query
+(`insertIfAbsent`, `countUsersAhead`, the `user_rank` upsert, `grantIfAbsent`) plus the ranking query. H2
+cannot catch the three defects that once broke the whole XP path on Postgres: native SQL that ignores
+`default_schema`, a column the migrations leave NULL, and a `GROUP BY` H2 accepts but Postgres rejects. It
+needs Docker (CI has it) and is skipped, not failed, without it.
+
 ## What's covered
 
 The critical paths all have tests: the IDOR header wiring (`UserIdHeaderFilterTest`) and the
@@ -167,7 +175,7 @@ the rule, and a service test alone doesn't prove the HTTP contract.
 
 ## Known gap (honest inventory)
 
-There's no Testcontainers / end-to-end suite spanning gateway → activity-service → RabbitMQ →
+There is no end-to-end suite spanning gateway → activity-service → RabbitMQ →
 gamification-service against real infra — every test is per-service with mocks or H2 at the boundary
 (a known backlog item).
 

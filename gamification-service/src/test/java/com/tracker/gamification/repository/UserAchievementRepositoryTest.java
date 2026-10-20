@@ -17,10 +17,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 // grantIfAbsent's native "ON CONFLICT ... DO NOTHING" query can't be exercised here: H2 2.3.232
 // doesn't parse the ON CONFLICT clause at all (confirmed empirically, in both H2's regular mode and
 // MODE=PostgreSQL compatibility mode — both fail with an identical syntax error). This is a
-// pre-existing gap shared by LevelTracker.insertIfAbsent, which uses the same idiom and has never
-// been exercised against a real database either. What IS verified here against H2: the
+// gap shared by LevelTracker.insertIfAbsent, which uses the same idiom; both are now covered against
+// real Postgres by PostgresNativeQueriesTest. What IS verified here against H2: the
 // uk_user_achievement unique constraint is actually enforced at the DB level, and the derived
 // query methods behave correctly.
+// The native query IS exercised, against a real Postgres, in PostgresNativeQueriesTest.
 @DataJpaTest
 public class UserAchievementRepositoryTest {
 

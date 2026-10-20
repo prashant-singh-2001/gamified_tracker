@@ -21,7 +21,7 @@ public interface UserAchievementRepository extends JpaRepository<UserAchievement
 
     @Modifying(flushAutomatically = true)
     @Query(value = """
-            INSERT INTO user_achievement (user_id, achievement_id, unlocked_at)
+            INSERT INTO {h-schema}user_achievement (user_id, achievement_id, unlocked_at)
             VALUES (:userId, :achievementId, now())
             ON CONFLICT (user_id, achievement_id) DO NOTHING
             """, nativeQuery = true)
