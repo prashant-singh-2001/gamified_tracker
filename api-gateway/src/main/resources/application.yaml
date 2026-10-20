@@ -76,6 +76,11 @@ app:
       enabled: ${ADMIN_BOOTSTRAP_ENABLED:false}
       email: ${ADMIN_EMAIL:}
       password: ${ADMIN_PASSWORD:}
+  # Password reset (POST /auth/forgot, /auth/reset). No mail provider is wired: the default notifier only
+  # logs. log-token writes the raw token to the log -- local development only, never in a shared env.
+  password-reset:
+    token-ttl: ${PASSWORD_RESET_TOKEN_TTL:30m}
+    log-token: ${PASSWORD_RESET_LOG_TOKEN:false}
 
 # Logging (very useful during dev)
 logging:

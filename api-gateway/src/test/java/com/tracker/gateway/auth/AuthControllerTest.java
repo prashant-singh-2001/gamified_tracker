@@ -31,6 +31,9 @@ public class AuthControllerTest {
     private AuthService authService;
 
     @MockBean
+    private PasswordResetService passwordResetService;
+
+    @MockBean
     private JwtUtil jwtUtil;
 
     // AuthRateLimitFilter is a @Component Filter, so @WebMvcTest's web-layer slicing
@@ -201,5 +204,54 @@ public class AuthControllerTest {
                         .content("{\"refreshToken\":\"\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.refreshToken").value("Refresh Token Is Required"));
+    }
+
+    @Test
+    void forgotAlwaysAnswers202WithTheSameBody_andNormalisesTheEmail() throws Exception {
+        mockMvc.perform(post("/auth/forgot")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"  Ada@Example.COM \"}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.message").value("If an account exists for that email, a reset link has been sent."));
+
+        org.mockito.Mockito.verify(passwordResetService).requestReset("ada@example.com");
+    }
+
+    @Test
+    void forgotRejectsAMissingOrMalformedEmail() throws Exception {
+        mockMvc.perform(post("/auth/forgot").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/auth/forgot").contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"not-an-email\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void resetReturns204OnSuccess() throws Exception {
+        mockMvc.perform(post("/auth/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"abc\",\"newPassword\":\"new-pass\"}"))
+                .andExpect(status().isNoContent());
+
+        org.mockito.Mockito.verify(passwordResetService).resetPassword("abc", "new-pass");
+    }
+
+    @Test
+    void resetWithABadTokenIsA400ProblemDetail() throws Exception {
+        org.mockito.Mockito.doThrow(new com.tracker.gateway.exception.InvalidResetTokenException())
+                .when(passwordResetService).resetPassword("bad", "new-pass");
+
+        mockMvc.perform(post("/auth/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\":\"bad\",\"newPassword\":\"new-pass\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Invalid or expired reset token"));
+    }
+
+    @Test
+    void resetRequiresBothFields() throws Exception {
+        mockMvc.perform(post("/auth/reset").contentType(MediaType.APPLICATION_JSON).content("{\"token\":\"abc\"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/auth/reset").contentType(MediaType.APPLICATION_JSON).content("{\"newPassword\":\"x\"}"))
+                .andExpect(status().isBadRequest());
     }
 }
