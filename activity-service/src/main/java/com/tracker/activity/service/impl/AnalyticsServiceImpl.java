@@ -2,6 +2,8 @@ package com.tracker.activity.service.impl;
 
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.domain.ReportMode;
+import com.tracker.activity.domain.ReportWindow;
 import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
@@ -85,24 +87,33 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     }
 
     @Override
-    public ResponseEntity<WeeklyReportResponse> getWeeklyReport(Long callerUserId, Long userId) {
-        requireSelf(callerUserId, userId);
-        LocalDate today = LocalDate.now();
-        LocalDate currentWeekStart = today.minusDays(6);
-        LocalDate previousWeekStart = currentWeekStart.minusDays(7);
+    public ResponseEntity<WeeklyReportResponse> getWeeklyReport(Long callerUserId, Long userId, ReportMode mode) {
+        // "Today" is the server's calendar date (the services run on UTC, zone-less LocalDateTime
+        // throughout) -- unchanged from before modes existed.
+        return getWeeklyReport(callerUserId, userId, mode, LocalDate.now());
+    }
 
-        LocalDateTime prevStart = previousWeekStart.atStartOfDay();
-        LocalDateTime currentStart = currentWeekStart.atStartOfDay();
+    // Public (but not on the interface) so a test can pin "today"; the method above passes the real one.
+    public ResponseEntity<WeeklyReportResponse> getWeeklyReport(Long callerUserId, Long userId, ReportMode mode,
+                                                         LocalDate today) {
+        requireSelf(callerUserId, userId);
+        ReportWindow window = ReportWindow.of(mode, today);
+
+        // Everything from the start of the previous window to the end of today covers both windows
+        // (for CALENDAR the days between them are fetched and simply not counted).
+        LocalDateTime from = window.previousStart().atStartOfDay();
         LocalDateTime endNow = today.atTime(LocalTime.MAX);
 
-        List<ActivityLog> logs = activityLogRepository.findByUserIdAndStartTimeBetween(userId, prevStart, endNow);
+        List<ActivityLog> logs = activityLogRepository.findByUserIdAndStartTimeBetween(userId, from, endNow);
 
+        // Bucketed by START date, as ever. Rolling: identical to the old "start >= currentStart" /
+        // "start < currentStart" split, because the two windows are adjacent there.
         List<ActivityLog> currentWeekLogs = logs.stream()
-                .filter(l -> l.getStartTime() != null && !l.getStartTime().isBefore(currentStart))
+                .filter(l -> l.getStartTime() != null && window.inCurrent(l.getStartTime().toLocalDate()))
                 .toList();
 
         List<ActivityLog> previousWeekLogs = logs.stream()
-                .filter(l -> l.getStartTime() != null && l.getStartTime().isBefore(currentStart))
+                .filter(l -> l.getStartTime() != null && window.inPrevious(l.getStartTime().toLocalDate()))
                 .toList();
 
         double currentWeekXp = sumXp(currentWeekLogs);
@@ -129,8 +140,10 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 .filter(l -> l.getStartTime() != null)
                 .collect(Collectors.groupingBy(l -> l.getStartTime().toLocalDate()));
 
+        // Always seven entries: rolling is today-6..today; calendar is Monday..Sunday, with the days
+        // after today present and zero so a client can draw the whole week.
         List<DailyXpResponse> dailyBreakdown = new ArrayList<>();
-        for (LocalDate date = currentWeekStart; !date.isAfter(today); date = date.plusDays(1)) {
+        for (LocalDate date = window.currentStart(); !date.isAfter(window.displayEnd()); date = date.plusDays(1)) {
             List<ActivityLog> dayLogs = currentWeekGrouped.getOrDefault(date, List.of());
             dailyBreakdown.add(new DailyXpResponse(date, sumXp(dayLogs), sumDurationMinutes(dayLogs)));
         }
@@ -141,7 +154,12 @@ public class AnalyticsServiceImpl implements AnalyticsService {
                 percentageChange,
                 totalActiveMinutes,
                 topCategory,
-                dailyBreakdown
+                dailyBreakdown,
+                window.mode(),
+                window.currentStart(),
+                window.displayEnd(),
+                window.previousStart(),
+                window.previousEnd()
         );
 
         return ResponseEntity.ok(report);
