@@ -5,6 +5,7 @@ import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.ReviewStatus;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -15,7 +16,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface ActivityLogRepository extends JpaRepository<ActivityLog, Long> {
+public interface ActivityLogRepository extends JpaRepository<ActivityLog, Long>, JpaSpecificationExecutor<ActivityLog> {
     List<ActivityLog> findByUserId(Long userId);
 
     // DELETE /activity/{id}: is this activity part of anyone's history? Decides soft vs hard delete.

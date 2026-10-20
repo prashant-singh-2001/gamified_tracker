@@ -1,7 +1,9 @@
 package com.tracker.activity.service;
 
+import com.tracker.activity.domain.ActivityLogQuery;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
+import com.tracker.activity.dto.PagedResponse;
 import com.tracker.activity.dto.StreakResponse;
 import org.springframework.http.ResponseEntity;
 
@@ -15,6 +17,10 @@ public interface ActivityLogService {
     // #79/#88: callerUserId is the trusted header identity; id is the path subject being
     // requested. Throws OwnershipViolationException when they differ.
     ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(Long callerUserId, Long id);
+
+    // The paged, sortable, filterable form of the above. Same ownership rule (403 for anyone but the
+    // owner); the unpaged method stays for clients that have not switched.
+    ResponseEntity<PagedResponse<ActivityLogResponse>> getActivityForUserPaged(Long callerUserId, Long id, ActivityLogQuery query);
 
     ResponseEntity<ActivityLogResponse> addActivityLogResponseResponseEntity(Long userId, ActivityLogRequest addActivityLogRequest);
 
