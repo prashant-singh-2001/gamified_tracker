@@ -1,5 +1,7 @@
 package com.tracker.activity.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.util.List;
 
 /**
@@ -15,13 +17,21 @@ import java.util.List;
  * carrying a name the user never typed.
  */
 public record NaturalLogDraftResponse(
+        @Schema(nullable = true, description = "Exactly the body to POST to /activitylog/ to log this. Present only "
+                + "when status is PARSED; null for every other status.")
         ActivityLogRequest draft,
         // Short, human-readable restatement of what was understood (PARSED) or why nothing could be
         // committed (NEEDS_CLARIFICATION). Null for DISABLED/UNAVAILABLE, same as narrative is null
         // for those NarrativeStatus values (#65).
+        @Schema(nullable = true, description = "Short restatement of what was understood (PARSED) or what is "
+                + "missing (NEEDS_CLARIFICATION). Null for DISABLED and UNAVAILABLE.")
         String interpretation,
         DraftStatus status,
+        @Schema(nullable = true, description = "Preview of how draft.activityName would resolve when committed. "
+                + "Null unless a fuzzy substitution would happen.")
         ActivityNameResolution nameResolution,
+        @Schema(description = "Close catalog matches for draft.activityName. Empty (never null) when there is "
+                + "nothing to suggest, including for DISABLED.")
         List<ActivitySuggestion> suggestions
 ) {
 }

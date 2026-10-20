@@ -274,3 +274,13 @@ history that closed #70's stated blocker before this feature needed to touch it)
 [Error Handling](error-handling.md) (why the `try`/`catch` here can't rely on a catch-all handler) ·
 [docs/FLOWS.md, Part V](../FLOWS.md#part-v--logging-an-activity-the-spine) ·
 issue #70
+
+## `DISABLED` is part of the contract
+
+The feature needs a model backend and ships off, so `DISABLED` is the state most deployments return.
+It is therefore a documented, stable outcome rather than an incidental one: HTTP 200 always, `status:
+"DISABLED"`, `draft`, `interpretation` and `nameResolution` null, `suggestions` empty. A client may rely on
+it to hide or disable the natural-language input, and it will not turn into an error status. This is
+published in the generated OpenAPI (`/v3/api-docs`): the `status` enum and description, and a named
+`DISABLED` example on the 200 response. `OpenApiContractTest` pins both so the spec cannot drift from the
+code.

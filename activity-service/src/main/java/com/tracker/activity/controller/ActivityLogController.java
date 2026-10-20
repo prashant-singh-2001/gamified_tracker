@@ -10,6 +10,10 @@ import com.tracker.activity.dto.RecentActivityResponse;
 import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.service.ActivityLogService;
 import com.tracker.activity.service.NaturalLogService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 
@@ -44,6 +48,31 @@ public class ActivityLogController {
     // Issue #70. Writes nothing -- POST the returned draft to addActivityLog above to actually log
     // it. userId is taken from the trusted header (never a path variable) for the same reason every
     // other endpoint here does, even though this call has no per-user data to look up today.
+    @Operation(summary = "Preview a log from one free-text sentence (writes nothing)",
+            description = "Parses text such as \"studied Spring Boot for 90 minutes this morning\" into a draft request "
+                    + "body for POST /activitylog/. Never logs anything; the client posts the draft to commit it. "
+                    + "The HTTP status is always 200 and `status` tells the outcome. **`DISABLED` is a stable part of "
+                    + "this contract**: the feature needs a model backend and is off by default "
+                    + "(natural-log.enabled=false), so a client must treat `DISABLED` as a normal state, hide or "
+                    + "disable the natural-language input, and not show an error.")
+    @ApiResponse(responseCode = "200", description = "Always 200. See `status`: PARSED, NEEDS_CLARIFICATION, "
+            + "DISABLED (feature switched off) or UNAVAILABLE (feature on, model did not answer).",
+            content = @Content(mediaType = "application/json",
+                    schema = @io.swagger.v3.oas.annotations.media.Schema(implementation = NaturalLogDraftResponse.class),
+                    examples = {
+                    @ExampleObject(name = "PARSED", value = "{\"draft\":{\"activityName\":\"Study\","
+                            + "\"startTime\":\"2026-10-20T08:00:00\",\"endTime\":\"2026-10-20T09:30:00\","
+                            + "\"notes\":null},\"interpretation\":\"Study for 90 minutes (2026-10-20T08:00 to "
+                            + "2026-10-20T09:30)\",\"status\":\"PARSED\",\"nameResolution\":null,\"suggestions\":[]}"),
+                    @ExampleObject(name = "NEEDS_CLARIFICATION", value = "{\"draft\":null,\"interpretation\":"
+                            + "\"Couldn't tell how long this took -- try including a duration.\","
+                            + "\"status\":\"NEEDS_CLARIFICATION\",\"nameResolution\":null,\"suggestions\":[]}"),
+                    @ExampleObject(name = "DISABLED", summary = "Feature off (the default). Stable contract.",
+                            value = "{\"draft\":null,\"interpretation\":null,\"status\":\"DISABLED\","
+                                    + "\"nameResolution\":null,\"suggestions\":[]}"),
+                    @ExampleObject(name = "UNAVAILABLE", value = "{\"draft\":null,\"interpretation\":null,"
+                            + "\"status\":\"UNAVAILABLE\",\"nameResolution\":null,\"suggestions\":[]}")
+            }))
     @PostMapping("/natural")
     public ResponseEntity<NaturalLogDraftResponse> parseNaturalLog(
             @RequestHeader("userId") Long userId, @Valid @RequestBody NaturalLogRequest request) {
