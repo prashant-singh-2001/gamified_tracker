@@ -34,6 +34,113 @@ public class ActivityLevelThresholdServiceImplTest {
     @InjectMocks
     private ActivityLevelThresholdServiceImpl activityLevelThresholdService;
 
+    // ---- item 12: PUT / DELETE and the monotonic-curve guard --------------------------------------
+
+    private static ActivityLevelThreshold row(long activityId, int level, double xp) {
+        return ActivityLevelThreshold.builder()
+                .id(new ActivityLevelThresholdId(activityId, level)).xpRequired(xp).build();
+    }
+
+    private void curve(long activityId, double... xpByLevel) {
+        var rows = new java.util.ArrayList<ActivityLevelThreshold>();
+        for (int i = 0; i < xpByLevel.length; i++) {
+            rows.add(row(activityId, i + 1, xpByLevel[i]));
+        }
+        when(activityLevelThresholdRepository.findAllForActivity(activityId)).thenReturn(rows);
+    }
+
+    @Test
+    @DisplayName("update changes the row's XP when it stays between its neighbours")
+    void testUpdateBetweenNeighbours() {
+        curve(1L, 100, 250, 500);
+        when(activityLevelThresholdRepository.findById(new ActivityLevelThresholdId(1L, 2)))
+                .thenReturn(Optional.of(row(1L, 2, 250)));
+        when(activityLevelThresholdRepository.save(any(ActivityLevelThreshold.class))).thenAnswer(i -> i.getArgument(0));
+
+        var result = activityLevelThresholdService.updateActivityLevelThreshold(1L, 2, 300.0);
+
+        assertEquals(300.0, result.xpRequired());
+        assertEquals(2, result.level());
+    }
+
+    @Test
+    @DisplayName("update rejects XP at or below the previous level, or at or above the next")
+    void testUpdateRejectsNonMonotonic() {
+        curve(1L, 100, 250, 500);
+        when(activityLevelThresholdRepository.findById(new ActivityLevelThresholdId(1L, 2)))
+                .thenReturn(Optional.of(row(1L, 2, 250)));
+
+        var low = assertThrows(com.tracker.gamification.exception.InvalidThresholdCurveException.class,
+                () -> activityLevelThresholdService.updateActivityLevelThreshold(1L, 2, 100.0));
+        assertTrue(low.getMessage().contains("more XP than level 1"));
+        assertThrows(com.tracker.gamification.exception.InvalidThresholdCurveException.class,
+                () -> activityLevelThresholdService.updateActivityLevelThreshold(1L, 2, 500.0));
+        assertThrows(com.tracker.gamification.exception.InvalidThresholdCurveException.class,
+                () -> activityLevelThresholdService.updateActivityLevelThreshold(1L, 2, 900.0));
+        verify(activityLevelThresholdRepository, never()).save(any(ActivityLevelThreshold.class));
+    }
+
+    @Test
+    @DisplayName("update of the first and last level only has one neighbour to respect")
+    void testUpdateEdgeLevels() {
+        curve(1L, 100, 250, 500);
+        when(activityLevelThresholdRepository.findById(new ActivityLevelThresholdId(1L, 1)))
+                .thenReturn(Optional.of(row(1L, 1, 100)));
+        when(activityLevelThresholdRepository.findById(new ActivityLevelThresholdId(1L, 3)))
+                .thenReturn(Optional.of(row(1L, 3, 500)));
+        when(activityLevelThresholdRepository.save(any(ActivityLevelThreshold.class))).thenAnswer(i -> i.getArgument(0));
+
+        assertEquals(1.0, activityLevelThresholdService.updateActivityLevelThreshold(1L, 1, 1.0).xpRequired());
+        assertEquals(10_000.0, activityLevelThresholdService.updateActivityLevelThreshold(1L, 3, 10_000.0).xpRequired());
+    }
+
+    @Test
+    @DisplayName("update of a level that does not exist is a not-found, not an upsert")
+    void testUpdateMissing() {
+        when(activityLevelThresholdRepository.findById(any(ActivityLevelThresholdId.class))).thenReturn(Optional.empty());
+
+        assertThrows(java.util.NoSuchElementException.class,
+                () -> activityLevelThresholdService.updateActivityLevelThreshold(1L, 7, 100.0));
+        verify(activityLevelThresholdRepository, never()).save(any(ActivityLevelThreshold.class));
+    }
+
+    @Test
+    @DisplayName("POST (upsert) is held to the same curve rule, so the PUT guard cannot be bypassed")
+    void testSaveRejectsNonMonotonic() {
+        curve(1L, 100, 250, 500);
+
+        assertThrows(com.tracker.gamification.exception.InvalidThresholdCurveException.class,
+                () -> activityLevelThresholdService.saveActivityLevelThreshold(new ActivityLevelThresholdDto(1L, 2, 90.0)));
+        verify(activityLevelThresholdRepository, never()).save(any(ActivityLevelThreshold.class));
+    }
+
+    @Test
+    @DisplayName("POST of a brand-new level between its neighbours is fine")
+    void testSaveNewLevelBetweenNeighbours() {
+        when(activityLevelThresholdRepository.findAllForActivity(1L))
+                .thenReturn(List.of(row(1L, 1, 100), row(1L, 3, 500)));
+
+        var result = activityLevelThresholdService.saveActivityLevelThreshold(new ActivityLevelThresholdDto(1L, 2, 300.0));
+
+        assertEquals(300.0, result.xpRequired());
+    }
+
+    @Test
+    @DisplayName("delete removes an existing row; a missing one is a not-found")
+    void testDelete() {
+        var id = new ActivityLevelThresholdId(1L, 2);
+        when(activityLevelThresholdRepository.existsById(id)).thenReturn(true);
+
+        activityLevelThresholdService.deleteActivityLevelThreshold(1L, 2);
+
+        verify(activityLevelThresholdRepository).deleteById(id);
+
+        when(activityLevelThresholdRepository.existsById(new ActivityLevelThresholdId(1L, 9))).thenReturn(false);
+        assertThrows(java.util.NoSuchElementException.class,
+                () -> activityLevelThresholdService.deleteActivityLevelThreshold(1L, 9));
+        verify(activityLevelThresholdRepository, never()).deleteById(new ActivityLevelThresholdId(1L, 9));
+    }
+
     @Test
     @DisplayName("getActivityLevelThresholdById returns mapped ActivityLevelThresholdDto")
     void testGetActivityLevelThresholdById() {

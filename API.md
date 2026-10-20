@@ -478,7 +478,13 @@ Request/response bodies otherwise mirror the Gamification Service (`activityId`,
 | `GET` | `/api/threshold` | authenticated | list all thresholds |
 | `GET` | `/api/threshold/activity/{activityId}?upToLevel=10` | authenticated | the activity's **effective** ladder: its explicit rows if it has any, otherwise the default curve generated for levels 1..`upToLevel`. Nothing is persisted either way |
 | `POST` | `/api/threshold/activity` | authenticated | look up one threshold by composite key (a read, despite `POST`) |
-| `POST` | `/api/threshold` | authenticated | create (or overwrite) a threshold |
+| `POST` | `/api/threshold` | **ADMIN** | create (or overwrite) a threshold |
+| `PUT` | `/api/threshold/{activityId}/{level}` | **ADMIN** | change the XP of an existing row. Body `{"xpRequired": 300}`; returns `{activityId, level, xpRequired}`. `404` if the row does not exist (use `POST` to create), `409` if it breaks the curve |
+| `DELETE` | `/api/threshold/{activityId}/{level}` | **ADMIN** | remove one row. `204`; `404` if it does not exist |
+
+**Curve rule (`PUT` and `POST`):** `xpRequired` is cumulative XP and must rise strictly with level. A row must need more XP than the nearest lower level and less than the nearest higher one, otherwise `409` with a ProblemDetail such as `Level 2 must need more XP than level 1 (100.0), but got 50.0`.
+
+**Existing progress is not recomputed.** Stored tracker levels are re-resolved from total XP the next time that user earns XP for the activity, so an edit shows up lazily and past level-up notifications are untouched. Deleting a row can leave a gap in level numbers (1, 3), which is still valid. Deleting an activity's last row returns it to the default curve.
 
 Request/response bodies mirror the Gamification Service (`activityId`, `level`, `xpRequired`) — see [Gamification Service § Activity Level Threshold](#activity-level-threshold-1) below.
 

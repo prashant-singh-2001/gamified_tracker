@@ -14,7 +14,9 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -27,6 +29,51 @@ public class ActivityLevelThresholdControllerTest {
 
     @MockBean
     private ActivityLevelThresholdServiceImpl activityLevelThresholdService;
+
+    @Test
+    void putUpdatesTheThreshold() throws Exception {
+        when(activityLevelThresholdService.updateActivityLevelThreshold(1L, 2, 300.0))
+                .thenReturn(new ActivityLevelThresholdDto(1L, 2, 300.0));
+
+        mockMvc.perform(put("/threshold/1/2").contentType(MediaType.APPLICATION_JSON).content("{\"xpRequired\":300}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.activityId").value(1))
+                .andExpect(jsonPath("$.level").value(2))
+                .andExpect(jsonPath("$.xpRequired").value(300.0));
+    }
+
+    @Test
+    void putValidatesTheBody() throws Exception {
+        mockMvc.perform(put("/threshold/1/2").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("xpRequired is required"));
+        mockMvc.perform(put("/threshold/1/2").contentType(MediaType.APPLICATION_JSON).content("{\"xpRequired\":0}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void putMapsNonMonotonicTo409AndMissingTo404() throws Exception {
+        when(activityLevelThresholdService.updateActivityLevelThreshold(1L, 2, 50.0))
+                .thenThrow(new com.tracker.gamification.exception.InvalidThresholdCurveException("Level 2 must need more XP than level 1 (100.0), but got 50.0"));
+        when(activityLevelThresholdService.updateActivityLevelThreshold(1L, 9, 50.0))
+                .thenThrow(new java.util.NoSuchElementException("ActivityLevelThreshold not found for activity 1 level 9"));
+
+        mockMvc.perform(put("/threshold/1/2").contentType(MediaType.APPLICATION_JSON).content("{\"xpRequired\":50}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("Level 2 must need more XP than level 1 (100.0), but got 50.0"));
+        mockMvc.perform(put("/threshold/1/9").contentType(MediaType.APPLICATION_JSON).content("{\"xpRequired\":50}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void deleteReturns204AndMissingIs404() throws Exception {
+        mockMvc.perform(delete("/threshold/1/2")).andExpect(status().isNoContent());
+        verify(activityLevelThresholdService).deleteActivityLevelThreshold(1L, 2);
+
+        org.mockito.Mockito.doThrow(new java.util.NoSuchElementException("ActivityLevelThreshold not found for activity 1 level 9"))
+                .when(activityLevelThresholdService).deleteActivityLevelThreshold(1L, 9);
+        mockMvc.perform(delete("/threshold/1/9")).andExpect(status().isNotFound());
+    }
 
     @Test
     void testGetActivityLevelThreshold() throws Exception {

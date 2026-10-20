@@ -94,6 +94,10 @@ public class SecurityConfig {
                         // create path is gated — POST /threshold/activity is a read that happens
                         // to use POST for its request body, not a write.
                         .requestMatchers(HttpMethod.POST, "/api/threshold", "/api/threshold/").hasRole("ADMIN")
+                        // Editing or removing a threshold row changes the level curve for every user, so
+                        // PUT/DELETE /threshold/{activityId}/{level} are maintainer-only too.
+                        .requestMatchers(HttpMethod.PUT, "/api/threshold/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/api/threshold/**").hasRole("ADMIN")
                         // #83: full rank recompute is an expensive maintenance operation, not a
                         // user action.
                         .requestMatchers(HttpMethod.POST, "/api/ranks/recompute", "/api/ranks/recompute/")
