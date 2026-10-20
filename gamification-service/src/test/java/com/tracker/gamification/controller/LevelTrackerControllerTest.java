@@ -192,6 +192,22 @@ public class LevelTrackerControllerTest {
     }
 
     @Test
+    @DisplayName("Test a validation failure carries a per-field 'errors' map alongside the joined detail")
+    void testValidationFailure_returnsFieldErrorsMap() throws Exception {
+        String json = "{\"activityId\":1,\"xp\":1.0E18}";
+
+        mockMvc.perform(post("/level")
+                        .header("userId", 1L)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.errors.xp").value("xp exceeds the per-award cap of 10000"))
+                .andExpect(jsonPath("$.errors.length()").value(1));
+    }
+
+    @Test
     @DisplayName("Test getLevelTrackerByUserId method")
     void testGetLevelTrackerByUserId() throws Exception {
         // OLD: var response1 = new LevelTrackerDto(1L, 1L, 5, 500.0, 250.0, false);

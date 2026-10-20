@@ -50,6 +50,26 @@ public class ActivityControllerTest {
     }
 
     @Test
+    void testAddActivityInvalidBodyReturnsPerFieldErrors() throws Exception {
+        // name blank, category missing, multiplier not positive: three different fields fail at once
+        String json = "{\"name\":\"\",\"xpMultiplier\":-1,\"active\":true}";
+
+        mockMvc.perform(post("/activity/")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.errors.name").value("name feild is required"))
+                .andExpect(jsonPath("$.errors.category").value("fill up the category"))
+                .andExpect(jsonPath("$.errors.xpMultiplier").value("xpMultiplayer cannot be negative or zero"))
+                .andExpect(jsonPath("$.errors.length()").value(3))
+                // detail stays the joined messages (sorted by field), so a client showing only
+                // "detail" is unaffected
+                .andExpect(jsonPath("$.detail").value(
+                        "fill up the category; name feild is required; xpMultiplayer cannot be negative or zero"));
+    }
+
+    @Test
     void testGetAllActivities() throws Exception {
         var response = new ActivityResponseRecord(
                 "Study",

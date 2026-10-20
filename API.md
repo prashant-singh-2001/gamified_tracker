@@ -593,7 +593,24 @@ Most `404` responses across all three services use Spring's RFC 7807 `ProblemDet
 }
 ```
 
-`401` (`POST /auth/login` failures) and `400` (validation failures on activity-service endpoints) also use `ProblemDetail`. Validation `400`s carry every field violation joined into `detail`, e.g. `"Activity name is required; Start time is required"`.
+`401` (`POST /auth/login` failures) and `400` (validation failures, on every service) also use `ProblemDetail`.
+
+**Validation `400`s** (a `@Valid` request body that fails Bean Validation — gateway auth endpoints, activity-service and gamification-service alike) carry every violation twice: joined into `detail` for a human, and as an **`errors`** extension member mapping each offending field to its message, so a form can mark the exact field:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "email should be formatted and required; password is required",
+  "instance": "/auth/register",
+  "errors": {
+    "email": "email should be formatted and required",
+    "password": "password is required"
+  }
+}
+```
+`errors` keys are the request field names (nested fields use their path, e.g. `items[0].name`); if a field fails several constraints its messages are joined with `"; "`; a class-level constraint with no field is keyed by the object name. `detail` is sorted by field name, so it is stable. `detail` has always been the joined messages on activity-service and gamification-service, and the gateway now matches, so a client that only reads `detail` keeps working.
 
 **Not this shape:** the `401` for a missing/expired/malformed bearer token and the `403` for a caller without the required role are written by Spring Security's filter chain, before any controller advice runs. Neither is customized in this project, so both use Spring's defaults — an **empty body** plus a `WWW-Authenticate: Bearer` header explaining the failure, not a `ProblemDetail`. This is the one place a client parses a different error shape than everywhere else in the API.
 

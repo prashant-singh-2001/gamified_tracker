@@ -4,12 +4,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.NoSuchElementException;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.TreeMap;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -31,14 +33,29 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Invalid request body");
     }
 
-    // #74: without this, a @Valid failure (e.g. ManualXpAwardRequest's xp cap) fell through
-    // to Spring's default 400, which omits the message body — the admin cap rejection was
-    // an opaque 400 with no reason. Pattern copied from activity-service's handler.
+    // @Valid on a request body fails with MethodArgumentNotValidException rather than a custom
+    // exception. 400 with an "errors" extension member mapping each offending field to its message
+    // so a form can mark the exact field. "detail" stays the joined human-readable messages it has
+    // always been, so a client that only shows "detail" keeps working.
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
-        String detail = ex.getBindingResult().getFieldErrors().stream()
-                .map(FieldError::getDefaultMessage)
-                .collect(Collectors.joining("; "));
-        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, detail);
+        Map<String, String> errors = new TreeMap<>();
+        for (FieldError fieldError : ex.getBindingResult().getFieldErrors()) {
+            errors.merge(fieldError.getField(), messageOf(fieldError.getDefaultMessage()),
+                    (first, second) -> first + "; " + second);
+        }
+        // Class-level constraints have no field; key them by object name rather than drop them.
+        for (ObjectError globalError : ex.getBindingResult().getGlobalErrors()) {
+            errors.merge(globalError.getObjectName(), messageOf(globalError.getDefaultMessage()),
+                    (first, second) -> first + "; " + second);
+        }
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+                String.join("; ", errors.values()));
+        problem.setProperty("errors", errors);
+        return problem;
+    }
+
+    private static String messageOf(String defaultMessage) {
+        return defaultMessage == null ? "invalid" : defaultMessage;
     }
 }
