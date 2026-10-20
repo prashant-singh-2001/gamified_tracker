@@ -358,6 +358,29 @@ List all activity logs for a user. Requires auth. **Owner-only (#79/#88)** — `
 
 **Response:** `200 OK`, JSON array of the same shape as the `POST` response above — **except** `bonusApplied`, `bonusMultiplier` are always `false`/`1.0` here (and on `GET /api/activitylog/{id}`), regardless of what actually happened when the log was created. Those two fields aren't persisted columns; they're only populated on the `POST` response itself, from the in-memory roll. `leveledUp` is `false` everywhere, including on the `POST` response itself now — see the note above. `403` `ProblemDetail` if `{id}` isn't the caller's own.
 
+##### Paging, sorting and filtering
+
+With **none** of the parameters below, this returns every log as a bare array, exactly as above — that form is unchanged and stays until the frontend switches. Passing **any one** of them selects the paged form, which answers an envelope instead:
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `page` | `0` | zero-based; `< 0` is a `400`. A page past the end is `200` with empty `content` |
+| `size` | `20` | `1`–`100`; anything else is a `400` (it bounds one response, ask for the next page for more) |
+| `sort` | `startTime,desc` | `field` or `field,asc\|desc`. A bare field is ascending. Fields: `startTime`, `endTime`, `createdAt`, `xpEarned`, `durationMinutes` — anything else is a `400` |
+| `activityId` | — | only logs for that activity. An unknown id is an empty page, not an error |
+| `from`, `to` | — | ISO dates (`2026-10-01`), **inclusive** of both days, by log **start** date (the same calendar the analytics use). `from` after `to` is a `400` |
+
+Filters combine with AND. Rows with an equal sort value are ordered by `id` in the same direction, so a row is never repeated or dropped at a page boundary.
+
+```http
+GET /api/activitylog/user/20?page=1&size=3&sort=xpEarned,desc&activityId=1&from=2026-10-01&to=2026-10-31
+```
+```json
+{ "content": [ { "id": 1130, "activity": {...}, "xpEarned": 229.39, ... }, ... ],
+  "page": 1, "size": 3, "totalElements": 22, "totalPages": 8, "sort": "xpEarned,desc" }
+```
+`content` rows have the same shape as the unpaged array. `totalElements` counts the **filtered** rows. `sort` echoes the order actually applied (including the default). Invalid values are `400` `ProblemDetail`s naming the parameter, e.g. `"size must be between 1 and 100 (got 0)"`; the owner-only `403` applies to the paged form too.
+
 ---
 
 #### `GET /api/activitylog/streaks/user/{id}`
@@ -615,7 +638,7 @@ Fetch one activity log by id. Reads the caller's id from the required `userId` r
 Create an activity log (computes duration + XP bonus, saves the log, and writes an outbox row for async XP application — see [`EVENT_DRIVEN_DECOUPLING.md`](docs/features/event-driven-decoupling.md); no synchronous call to Gamification Service). Same request/response shape as the Gateway's `POST /api/activitylog`, including the now-always-`false` `leveledUp`. `404` `ProblemDetail` if `activityName` doesn't match an existing activity. Reads `userId` from the `userId` request header (required) rather than the body — when called through the Gateway this header is the trusted, JWT-derived value; called directly against `:8081` (bypassing the Gateway, as this dev setup allows), the header is unauthenticated and effectively caller-supplied, since this service has no security layer of its own.
 
 #### `GET /activitylog/user/{id}`
-List all activity logs for a user. **Owner-only (#79/#88)** — `{id}` must equal the caller's `userId` header (required) or the response is `403`, same trust-boundary caveat as `POST /activitylog/` above when called directly against `:8081`.
+List all activity logs for a user. **Owner-only (#79/#88)** — `{id}` must equal the caller's `userId` header (required) or the response is `403`, same trust-boundary caveat as `POST /activitylog/` above when called directly against `:8081`. Accepts `page`, `size`, `sort`, `activityId`, `from` and `to`; with none of them the response is the bare array, with any of them the paged envelope — see [Paging, sorting and filtering](#paging-sorting-and-filtering) above.
 
 #### `GET /activitylog/streaks/user/{id}`
 List every `(activityId, currentStreak, longestStreak, lastActivityDate)` row for a user. **Owner-only (#80/#88)**, same rule and trust-boundary caveat as `GET /activitylog/user/{id}` above.
