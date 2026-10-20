@@ -51,6 +51,7 @@ award to CI) that links back to the relevant deep-dive below for the *why* behin
 | Doc | What it demonstrates |
 |---|---|
 | [Error Handling](error-handling.md) | One RFC 7807 `ProblemDetail` contract across every service, no-user-enumeration login errors, and byte-for-byte pass-through through the gateway — plus an honest gap: Spring Security's own 401/403 aren't in that shape yet |
+| [Password Reset](password-reset.md) | `POST /auth/forgot` and `/auth/reset`: hashed single-use expiring tokens, identical response for known and unknown emails, refresh sessions revoked on success, delivery behind a `PasswordResetNotifier` port (log-only default) |
 | [Fuzzy Activity-Name Matching](fuzzy-activity-matching.md) | A hand-written Jaro-Winkler matcher scoring name + description + category, split behind a provider seam for a future embedding/LLM scorer, with two rails on automatic substitution — a high threshold and an ambiguity guard — because the XP it awards is irreversible |
 | [Testing Strategy](testing-strategy.md) | A sliced test pyramid (48 classes) with `InOrder`/`ArgumentCaptor` side-effect verification and a serialized-shape wire-contract guard |
 

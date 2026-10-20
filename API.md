@@ -110,6 +110,38 @@ Exchanges a refresh token for a new access/refresh token pair — rotation with 
 
 **Response:** `200 OK`, JSON `AuthResponse` with a **new** access token and a **new** refresh token — the old refresh token is consumed by this call and can never be exchanged again. `401` `ProblemDetail` on any of four distinct failures: token not found, already revoked, expired, or **already used** — the last one atomically detects reuse (`UPDATE ... WHERE isUsed = false`, so two concurrent replays can't both win) and revokes every other refresh token issued to that user, since reuse of a consumed token implies it was compromised. See [Authentication & Identity § Refresh tokens](docs/features/authentication-and-identity.md) for the full rotation/reuse-detection design.
 
+
+---
+
+#### `POST /auth/forgot`
+Starts a password reset. Public, and under the same `/auth/**` rate limit (`429` when exceeded).
+
+```json
+// request
+{ "email": "ada@example.com" }
+// 202 Accepted, always the same body
+{ "message": "If an account exists for that email, a reset link has been sent." }
+```
+The response is identical whether or not the address has an account, so it cannot be used to find out who is registered. The email is trimmed and lower-cased like everywhere else. A malformed or missing email is `400`. Asking again retires the earlier token, so only the latest one works.
+
+Delivery goes through the `PasswordResetNotifier` interface. **No mail provider is wired yet**: the default implementation only logs that a reset was issued. For local development set `PASSWORD_RESET_LOG_TOKEN=true` to have it log the token (never do this in a shared environment). To send real mail, register a `PasswordResetNotifier` bean; the default backs off.
+
+| Setting | Default | |
+|---|---|---|
+| `PASSWORD_RESET_TOKEN_TTL` | `30m` | how long a token works |
+| `PASSWORD_RESET_LOG_TOKEN` | `false` | dev only, logs the raw token |
+
+#### `POST /auth/reset`
+Sets a new password using the token from the reset link. Public, rate limited with the rest of `/auth/**`.
+
+```json
+// request
+{ "token": "<token from the link>", "newPassword": "a-new-password" }
+// 204 No Content
+```
+`400` with `{"detail": "Invalid or expired reset token"}` for a token that is unknown, expired or already used (one message for all three). Tokens are single use, even under concurrent requests. Tokens are stored only as a SHA-256 hash.
+
+On success every refresh token of the account is revoked, so other sessions cannot renew. An access token already issued stays valid until it expires. The new password is held to the same rule as registration (non-blank).
 ---
 
 ### Activity

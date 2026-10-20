@@ -56,6 +56,12 @@ class AuthRateLimitFilterTest {
     }
 
     @Test
+    void passwordResetEndpointsShareTheAuthLimiter() {
+        assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/auth/forgot")));
+        assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/auth/reset")));
+    }
+
+    @Test
     void withinLimit_forwardsToChain() throws Exception {
         when(bucket.tryConsume(1)).thenReturn(true);
 
