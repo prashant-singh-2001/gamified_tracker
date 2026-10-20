@@ -3,12 +3,14 @@ package com.tracker.gateway.auth;
 import com.tracker.gateway.dto.AuthResponse;
 import com.tracker.gateway.dto.LoginRequest;
 import com.tracker.gateway.dto.RegisterRequest;
+import com.tracker.gateway.exception.EmailAlreadyRegisteredException;
 import com.tracker.gateway.exception.InvalidCredentialsException;
 import com.tracker.gateway.repository.UserRepository;
 import com.tracker.gateway.user.RefreshToken;
 import com.tracker.gateway.user.Role;
 import com.tracker.gateway.user.User;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +38,14 @@ public class AuthService {
 
     public AuthResponse register(RegisterRequest request) {
 
+        // request.email() is already trimmed + lower-cased (RegisterRequest's compact constructor),
+        // and stored that way, so this lookup and the unique constraint agree on what "same" means.
+        // The pre-check gives the common case a clean 409 without a failed insert; the catch below
+        // covers the race where two registrations both pass it.
+        if (userRepository.existsByEmail(request.email())) {
+            throw new EmailAlreadyRegisteredException();
+        }
+
         var user = new User();
         user.setFirstName(request.firstName());
         user.setLastName(request.lastName());
@@ -48,7 +58,17 @@ public class AuthService {
         // admins are provisioned out of band (app.admin.bootstrap.*).
         // OLD: user.setRole(request.role() != null ? request.role() : Role.USER);
         user.setRole(Role.USER);
-        userRepository.save(user);
+        try {
+            userRepository.save(user);
+        } catch (DataIntegrityViolationException ex) {
+            // Lost the race with a concurrent registration of the same email. Only that case is a
+            // conflict: if the email is not taken, this was some other integrity failure, so
+            // rethrow rather than mislabel it.
+            if (userRepository.existsByEmail(request.email())) {
+                throw new EmailAlreadyRegisteredException();
+            }
+            throw ex;
+        }
 
         String accessToken = jwtUtil.generateToken(user.getEmail(), user.getRole(), user.getId());
         RefreshToken refreshToken = refreshTokenService.generateRefreshToken(user);

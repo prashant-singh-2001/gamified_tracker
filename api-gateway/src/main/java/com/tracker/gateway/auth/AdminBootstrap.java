@@ -2,6 +2,7 @@ package com.tracker.gateway.auth;
 
 import com.tracker.gateway.config.AdminBootstrapProperties;
 import com.tracker.gateway.repository.UserRepository;
+import com.tracker.gateway.user.Emails;
 import com.tracker.gateway.user.Role;
 import com.tracker.gateway.user.User;
 import org.slf4j.Logger;
@@ -41,15 +42,17 @@ public class AdminBootstrap implements ApplicationRunner {
                     "app.admin.bootstrap.enabled=true requires app.admin.bootstrap.email and .password to be set");
         }
 
-        var existing = userRepository.findByEmail(properties.email());
+        // Same normalisation as registration/login, or a mixed-case ADMIN_EMAIL could never log in.
+        String email = Emails.normalize(properties.email());
+        var existing = userRepository.findByEmail(email);
         if (existing.isPresent()) {
             User user = existing.get();
             if (user.getRole() != Role.ADMIN) {
                 user.setRole(Role.ADMIN);
                 userRepository.save(user);
-                log.info("Admin bootstrap: promoted existing user {} to ADMIN", properties.email());
+                log.info("Admin bootstrap: promoted existing user {} to ADMIN", email);
             } else {
-                log.info("Admin bootstrap: {} is already ADMIN, nothing to do", properties.email());
+                log.info("Admin bootstrap: {} is already ADMIN, nothing to do", email);
             }
             return;
         }
@@ -57,10 +60,10 @@ public class AdminBootstrap implements ApplicationRunner {
         User admin = new User();
         admin.setFirstName("Admin");
         admin.setLastName("User");
-        admin.setEmail(properties.email());
+        admin.setEmail(email);
         admin.setPassword(passwordEncoder.encode(properties.password()));
         admin.setRole(Role.ADMIN);
         userRepository.save(admin);
-        log.info("Admin bootstrap: created ADMIN user {}", properties.email());
+        log.info("Admin bootstrap: created ADMIN user {}", email);
     }
 }

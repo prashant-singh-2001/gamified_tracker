@@ -1,5 +1,6 @@
 package com.tracker.gateway.dto;
 
+import com.tracker.gateway.user.Emails;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 
@@ -29,4 +30,10 @@ public record RegisterRequest(
         @NotBlank(message = "password is required")
         String password
 ) {
+
+    // Trimmed and lower-cased on the way in so "Ada@Example.com " and "ada@example.com" are one
+    // account. Runs before Bean Validation, so stray whitespace is tolerated, not rejected.
+    public RegisterRequest {
+        email = Emails.normalize(email);
+    }
 }
