@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 // parse the ON CONFLICT clause at all (see UserAchievementRepositoryTest for the same,
 // already-documented limitation). This test covers the derived queries instead, seeding rows via
 // the standard JPA save path.
+// The native query IS exercised, against a real Postgres, in PostgresNativeQueriesTest.
 @DataJpaTest
 public class UserRankRepositoryTest {
 

@@ -48,8 +48,8 @@ public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long
 
     @Modifying(flushAutomatically = true)
     @Query(value = """
-            INSERT INTO level_tracker (user_id, activity_id, total_xp, current_level_xp)
-            VALUES (:userId, :activityId, 0, 0)
+            INSERT INTO {h-schema}level_tracker (user_id, activity_id, total_xp, current_level_xp, log_count)
+            VALUES (:userId, :activityId, 0, 0, 0)
             ON CONFLICT (user_id, activity_id) DO NOTHING
             """, nativeQuery = true)
     int insertIfAbsent(@Param("userId") Long userId, @Param("activityId") Long activityId);
@@ -66,7 +66,6 @@ public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long
             SELECT l.userId as userId, l.totalXp as totalXp
             FROM LevelTracker l
             WHERE l.activityId = :activityId
-            GROUP BY l.userId
             ORDER BY l.totalXp DESC
             """)
     // #85: WHERE l.activityId = :activityId -- served by idx_level_tracker_activity_id, see
@@ -76,7 +75,7 @@ public interface LevelTrackerRepository extends JpaRepository<LevelTracker, Long
     @Query(value = """
             SELECT COUNT(*) FROM (
                 SELECT l.user_id
-                FROM level_tracker l
+                FROM {h-schema}level_tracker l
                 GROUP BY l.user_id
                 HAVING SUM(l.total_xp) > :xp
             ) ahead

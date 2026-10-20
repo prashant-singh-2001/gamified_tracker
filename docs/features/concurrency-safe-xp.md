@@ -50,12 +50,14 @@ sequenceDiagram
 ```java
 @Modifying(flushAutomatically = true)
 @Query(value = """
-        INSERT INTO level_tracker (user_id, activity_id, total_xp, current_level_xp)
-        VALUES (:userId, :activityId, 0, 0)
+        INSERT INTO {h-schema}level_tracker (user_id, activity_id, total_xp, current_level_xp, log_count)
+        VALUES (:userId, :activityId, 0, 0, 0)
         ON CONFLICT (user_id, activity_id) DO NOTHING
         """, nativeQuery = true)
 int insertIfAbsent(@Param("userId") Long userId, @Param("activityId") Long activityId);
 ```
+`{h-schema}` is Hibernate's placeholder for the configured `default_schema`. Native SQL is not rewritten the way JPQL is, so without it the table resolves against `public` and fails on Postgres (`gamification.level_tracker` in production, a bare name on the H2 test slice). `log_count` is inserted explicitly because the column has no default and the entity field is a primitive `int`.
+
 A native Postgres `ON CONFLICT DO NOTHING` — the database itself resolves the "does this row exist
 yet" race, so two concurrent first-time writers never both try to `INSERT` and one fail. The return
 value (`1` if it inserted, `0` if the row already existed) tells the caller whether to archive.

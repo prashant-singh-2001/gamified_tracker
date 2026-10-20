@@ -25,7 +25,7 @@ public interface UserRankRepository extends JpaRepository<UserRank, Long> {
 
     @Modifying(flushAutomatically = true)
     @Query(value = """
-            INSERT INTO user_rank (user_id, total_xp, overall_level, tier, percentile, position, total_users, updated_at)
+            INSERT INTO {h-schema}user_rank (user_id, total_xp, overall_level, tier, percentile, position, total_users, updated_at)
             VALUES (:userId, :totalXp, :overallLevel, :tier, :percentile, :position, :totalUsers, now())
             ON CONFLICT (user_id) DO UPDATE SET
                 total_xp = EXCLUDED.total_xp,
