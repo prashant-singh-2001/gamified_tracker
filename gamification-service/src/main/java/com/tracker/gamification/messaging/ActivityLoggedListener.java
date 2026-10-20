@@ -48,7 +48,12 @@ public class ActivityLoggedListener {
         // a genuine duplicate throws DataIntegrityViolationException here, not a silent UPDATE.
         processedEventRepository.saveAndFlush(new ProcessedEvent(key, LocalDateTime.now()));
 
+        // The producer sends the session end as UTC epoch millis; a message from before the field existed
+        // has none, and saveForLog then falls back to the time it applies the XP.
+        LocalDateTime occurredAt = event.occurredAtEpochMilli() == null ? null
+                : LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(event.occurredAtEpochMilli()), java.time.ZoneOffset.UTC);
+
         levelTrackerService.saveForLog(event.logId(), event.userId(),
-                new LevelTrackerRequestDTO(event.activityId(), event.xpEarned()));
+                new LevelTrackerRequestDTO(event.activityId(), event.xpEarned()), occurredAt);
     }
 }

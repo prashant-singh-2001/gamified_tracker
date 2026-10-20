@@ -7,7 +7,7 @@
 
 Every user has an **overall level** (absolute, derived from lifetime XP against a seeded threshold
 curve) and a **rank** (relative, their percentile standing among *all* tracked users, expressed as one
-of nine Summit-themed tiers). The two are deliberately different kinds of progression: level only ever
+of nine Summit-themed tiers, each in three divisions, computed from recent form). The two are deliberately different kinds of progression: level only ever
 goes up; rank is a live standing that can **promote or demote** a user as other people earn XP — the
 same dynamic that makes Clash-of-Clans-style leagues compelling. Sitting on top of both is a
 **within-tier leaderboard**, so every tier has its own race instead of everyone chasing one unreachable
@@ -87,6 +87,55 @@ presented as a nudge, not a promise. `percentile` is untouched (a top fraction; 
 An unranked caller still gets `404` by default; `?allowUnranked=true` opts in to `200 {"ranked": false}`,
 so the default can be flipped once the frontend no longer treats the `404` specially.
 
+### Fluid ranks: recent form, divisions, movement (issue #135)
+
+A rank used to be a percentile of **lifetime** XP, recomputed every 5 minutes into nine fixed bands. That is
+stiff: early players entrench, a player who stops logging never drops, nothing happens between tier lines,
+nobody can see whether they moved, and a session takes minutes to show. Four changes, all on the rank side;
+the lifetime figures (`totalXp`, `overallLevel`, `GET /leaderboard`) are unchanged.
+
+**1. The order is recent form, not lifetime XP.** Each award counts for `xp * 0.5^(age / halfLife)` with a
+14-day half-life (`ranking.half-life-days`): an award a fortnight old is worth half, a month old a quarter.
+`RankScore` holds that maths as pure functions. The inputs are the two tables that already timestamp every
+award: `log_xp_outcome` (one row per applied log) and `manual_xp_award` (admin awards count for their target
+user). Rows older than eight half-lives are never read (under 0.4% of their value), and an index on
+`log_xp_outcome.occurred_at` keeps that read to the recent slice.
+
+The age is **when the session happened**, not when it was processed. `ActivityLoggedEvent` carries an
+optional `occurredAtEpochMilli` (the log end time, UTC), the consumer stores it as
+`log_xp_outcome.occurred_at`, and a backdated or late-approved log therefore counts from its session time.
+The field is nullable and absent JSON reads as null, so in-flight messages and unpublished outbox rows stay
+valid; a null falls back to the time the XP was applied, and a time in the future is clamped to now.
+
+Ties on the score are broken by lifetime XP, so a crowd of lapsed users (all near zero) still sorts
+sensibly instead of landing in one band. Only users equal on **both** keys share a position. XP applied
+before `log_xp_outcome` existed (V7) has no session time and does not count toward the score.
+
+**2. Divisions.** Each tier band is cut into three equal thirds, `1` (best) to `3`, by
+`RankTier.divisionFor(topFraction)`; `divisionProgress` says how far up the current division the user sits
+(0 about to drop, 1 about to be promoted). The nudge now has two levels: `nextTier` / `xpToNextTier` as
+before, and `nextDivisionTier` / `nextDivision` / `xpToNextDivision` for the next better *populated*
+division, which from division 1 is the lowest division of the tier above. Both are "match the weakest
+member of that step", measured in score; XP earned now adds to the score one for one.
+
+**3. Movement.** `user_rank` keeps a baseline (`previous_tier`, `previous_division`, `previous_position`,
+`previous_at`). The recompute carries it forward while it is younger than `ranking.movement-window-hours`
+(24) and then rolls it to the state the row had just before the update, so the card reports change over
+roughly the last day, not since the previous 30 seconds (which would almost always read zero). It exposes
+`positionChange` (positive is up), `previousTier`, `previousDivision` and a `trend`: `NEW` (no baseline
+yet), `PROMOTED` / `DEMOTED` (tier or division changed), or `UP` / `DOWN` / `SAME` (same step, position
+moved). `RankMovement` holds the comparison. The baseline resets abruptly when it rolls, so a client should
+treat the trend as "recent movement", not a precise delta.
+
+**4. Faster.** `ranking.recompute-interval-ms` went from 300000 to 30000, with `lock-at-most-for` moved
+below it (`PT25S`) so the ShedLock never outlives the interval. Decay changes every score continuously, so a
+periodic recompute is the right model, and one pass over the users plus the recent award rows is cheap at
+this scale; at much larger scale this is the knob to revisit.
+
+`tier`, `percentile`, `position`, `tierCutoffXp` and `xpToNextTier` now follow the score, which is a
+behaviour change for anything that read them as lifetime standings. The tier boards order by
+`rank_score`; `GET /ranks/me` still 404s until ranked and `percentile` is still a top fraction.
+
 ## Key classes & code
 
 **`RankTier`** (`gamification-service/.../dao/RankTier.java`) is the single authoritative percentile→tier mapping. Each of the 9 tiers carries its `[lo, hi)` band;
@@ -119,7 +168,7 @@ public static RankTier fromTopFraction(double topFraction) {
 | 95–100% | `[0.95, 1.00]` | BASECAMP |
 
 **`RankRecomputeServiceImpl.recompute()`** — the batch. `LevelTrackerRepository.findAllUserTotals()`
-returns every user's cross-activity XP total, already ordered descending; the method walks that list
+returns every user lifetime XP total; since issue #135 the order is the recency-weighted score (lifetime XP breaks ties) and the method walks that list
 once, assigning a 1-based position and computing `topFraction = (position-1)/totalUsers`. **Tied users
 share the tie group's minimum position** — two people tied at the top both land on position 1, and the
 next distinct value picks up from the raw sequential count rather than the tie-inflated one — so equal
@@ -152,7 +201,10 @@ on-demand equivalent of the scheduled job, useful for demos and tests without wa
 ```yaml
 # gamification-service/src/main/resources/application.yaml
 ranking:
-  recompute-interval-ms: 300000   # 5 minutes; externalized so cadence can be tuned per environment
+  recompute-interval-ms: 30000    # 30 seconds; externalized so cadence can be tuned per environment
+  lock-at-most-for: PT25S         # ShedLock; must stay below the interval
+  half-life-days: 14              # XP loses half its rank weight every 14 days (issue #135)
+  movement-window-hours: 24       # how long a movement baseline lives before it rolls forward
 ```
 
 `GamificationServiceApplication` carries `@EnableScheduling` — without it, `@Scheduled` methods are

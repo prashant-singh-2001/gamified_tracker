@@ -112,7 +112,14 @@ messaging:
 ranking:
   # Cadence for RankRecomputeServiceImpl's scheduled re-rank; externalized so it can be
   # tuned per environment (e.g. faster for local/demo) without a rebuild.
-  recompute-interval-ms: 300000
+  recompute-interval-ms: ${RANKING_RECOMPUTE_INTERVAL_MS:30000}
+  # Must stay below the interval so a crashed instance lock never blocks the next legitimate tick.
+  lock-at-most-for: ${RANKING_LOCK_AT_MOST_FOR:PT25S}
+  # Fluid ranks (issue 135): a rank is a percentile of recency-decayed XP, not lifetime XP. XP halves
+  # in weight every half-life-days.
+  half-life-days: ${RANKING_HALF_LIFE_DAYS:14}
+  # How long a movement baseline lives before it is rolled forward: the horizon of "up 3 places".
+  movement-window-hours: ${RANKING_MOVEMENT_WINDOW_HOURS:24}
 
 leveling:
   default-curve:

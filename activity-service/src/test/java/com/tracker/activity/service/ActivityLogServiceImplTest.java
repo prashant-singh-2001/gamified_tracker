@@ -212,6 +212,8 @@ public class ActivityLogServiceImplTest {
         assertEquals(userId, deserialized.userId());
         assertEquals(activity.getId(), deserialized.activityId());
         assertEquals(body.xpEarned(), deserialized.xpEarned(), 1e-9);
+        // the session end, as UTC epoch millis, so gamification can age the XP by when it happened
+        assertEquals(request.endTime().toInstant(java.time.ZoneOffset.UTC).toEpochMilli(), deserialized.occurredAtEpochMilli());
     }
 
     @Test

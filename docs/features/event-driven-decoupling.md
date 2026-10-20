@@ -74,7 +74,7 @@ public ResponseEntity<ActivityLogResponse> addActivityLogResponseResponseEntity(
 
     var saved = activityLogRepository.save(activityLog);              // 1. log FIRST
 
-    var event = new ActivityLoggedEvent(saved.getId(), userId, saved.getActivity().getId(), saved.getXpEarned());
+    var event = new ActivityLoggedEvent(saved.getId(), userId, saved.getActivity().getId(), saved.getXpEarned(), sessionEndEpochMilli(saved));
     outboxEventRepository.save(OutboxEvent.builder()                  // 2. outbox row, SAME tx
             .aggregateType("ActivityLog").aggregateId(saved.getId()).eventType("ActivityLogged")
             .payload(toJson(event)).idempotencyKey(String.valueOf(saved.getId()))
@@ -172,7 +172,8 @@ hand-kept in sync across services (issue #23). It now lives once, in a `contract
 both services depend on:
 
 ```java
-public record ActivityLoggedEvent(Long logId, Long userId, Long activityId, double xpEarned) {
+public record ActivityLoggedEvent(Long logId, Long userId, Long activityId, double xpEarned,
+                                  Long occurredAtEpochMilli) {   // session end, UTC epoch millis; nullable (issue #135)
     /** Stable logical name stamped into the AMQP __TypeId__ header. */
     public static final String TYPE_ID = "activity.logged";
 }
