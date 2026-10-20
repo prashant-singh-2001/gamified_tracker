@@ -427,6 +427,21 @@ public class ActivityLogServiceImplTest {
         verify(activityStreakRepository).findByUserId(2L);
     }
 
+    @Test
+    @DisplayName("getStreaksForUser flags a streak active only when it was last extended today or yesterday (UTC)")
+    void testGetStreaksForUser_activeFlag() {
+        LocalDate todayUtc = LocalDate.now(java.time.ZoneOffset.UTC);
+        ActivityStreak live = ActivityStreak.builder().userId(2L).activityId(1L).currentStreak(4).longestStreak(4).lastActivityDate(todayUtc.minusDays(1)).build();
+        ActivityStreak broken = ActivityStreak.builder().userId(2L).activityId(2L).currentStreak(9).longestStreak(9).lastActivityDate(todayUtc.minusDays(3)).build();
+        when(activityStreakRepository.findByUserId(2L)).thenReturn(List.of(live, broken));
+
+        var body = activityLogService.getStreaksForUser(2L, 2L).getBody();
+
+        assertTrue(body.get(0).active());
+        assertFalse(body.get(1).active());
+        assertEquals(9, body.get(1).currentStreak());
+    }
+
     // #80/#88: same shape as #79 -- a caller asking for someone else's streaks gets a 403
     // before the repository is ever queried.
     @Test

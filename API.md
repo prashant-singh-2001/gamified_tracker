@@ -415,6 +415,7 @@ List every `(activity, streak)` pair for a user. Requires auth. **Owner-only (#8
 | `currentStreak` | int | consecutive days logged, mutated in place — see [Streaks](docs/features/streaks.md) |
 | `longestStreak` | int | high-water mark, never decreases |
 | `lastActivityDate` | ISO-8601 date | |
+| `active` | boolean | whether the streak is still alive: `lastActivityDate` is **today or yesterday (UTC)**. `currentStreak` is only rewritten when the next log arrives, so after a gap it keeps its old value; use `active` to know that value is stale (show `currentStreak` as live only when `active` is true) |
 
 `403` `ProblemDetail` if `{id}` isn't the caller's own.
 
@@ -670,7 +671,7 @@ Create an activity log (computes duration + XP bonus, saves the log, and writes 
 List all activity logs for a user. **Owner-only (#79/#88)** — `{id}` must equal the caller's `userId` header (required) or the response is `403`, same trust-boundary caveat as `POST /activitylog/` above when called directly against `:8081`. Accepts `page`, `size`, `sort`, `activityId`, `from` and `to`; with none of them the response is the bare array, with any of them the paged envelope — see [Paging, sorting and filtering](#paging-sorting-and-filtering) above.
 
 #### `GET /activitylog/streaks/user/{id}`
-List every `(activityId, currentStreak, longestStreak, lastActivityDate)` row for a user. **Owner-only (#80/#88)**, same rule and trust-boundary caveat as `GET /activitylog/user/{id}` above.
+List every `(activityId, currentStreak, longestStreak, lastActivityDate, active)` row for a user (`active`: last activity was today or yesterday, UTC). **Owner-only (#80/#88)**, same rule and trust-boundary caveat as `GET /activitylog/user/{id}` above.
 
 #### `POST /activitylog/natural`
 Issue #70. Parses one free-text sentence into a draft `ActivityLogRequest` — **writes nothing**, same request/response shape as the Gateway's `POST /api/activitylog/natural`. Reads `userId` from the `userId` request header (required), same trust-boundary caveat as `POST /activitylog/` above when called directly against `:8081`.

@@ -195,3 +195,12 @@ curl http://localhost:8080/api/activitylog/streaks/user/{userId} -H "Authorizati
 [Event-Driven Decoupling](event-driven-decoupling.md) (how the streak-boosted XP reaches
 gamification-service unchanged) · [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md) (the
 upsert pattern this mirrors) · issue #12
+
+## The `active` flag
+
+`GET /activitylog/streaks/user/{id}` also returns `active`, computed on read (nothing is stored): true when
+`lastActivityDate` is today or yesterday in **UTC** (`StreakResponse.from`). Yesterday counts because the
+streak is extended by logging today, so it can still be saved. The stored `currentStreak` is deliberately
+reported unchanged: it is only reset when the next log arrives, so after a gap it keeps its old value and
+`active=false` is how a client knows not to present it as a live streak. UTC is used, not the server's
+default zone, to match the API's other zone-less timestamps.
