@@ -538,11 +538,31 @@ a live aggregate query. See [Rank & Level System](docs/features/rank-and-level-s
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/ranks/me` | authenticated | the caller's `RankCardDto`: `tier`, `overallLevel`, `totalXp`, `percentile`, `position`, `totalUsers`, `updatedAt`. `404` if the caller has no rank yet (never recomputed) |
+| `GET` | `/api/ranks/me[?allowUnranked=true]` | authenticated | the caller's `RankCardDto`: `tier`, `overallLevel`, `totalXp`, `percentile`, `position`, `totalUsers`, `updatedAt`, plus the [rank nudge](#rank-nudge) fields. `404` if the caller has no rank yet (never recomputed) — **unless** `allowUnranked=true`, which answers `200 {"ranked": false}` instead |
 | `GET` | `/api/ranks/{tier}/leaderboard?page=0&size=20` | authenticated | members of one tier (`SUMMIT`, `PEAK`, `RIDGE`, `ALPINE`, `ASCENT`, `HIGHLAND`, `FOOTHILL`, `TRAILHEAD`, `BASECAMP`), each `{withinRankPosition, userId, totalXp, overallLevel, tier, displayName}` |
 | `GET` | `/api/ranks/me/leaderboard?page=0&size=20` | authenticated | same shape, scoped to the caller's own tier. `404` if the caller has no rank yet |
 | `GET` | `/api/ranks` | authenticated | tier distribution: array of `{tier, userCount}` |
 | `POST` | `/api/ranks/recompute` | authenticated | forces an off-schedule recompute (normally runs every `ranking.recompute-interval-ms`, default 5 min). Returns `{"rankedUsers": <int>}`. **No admin guard** — any authenticated caller can trigger this |
+
+#### Rank nudge
+
+`GET /api/ranks/me` also says how far the caller is from the next tier, so a result screen can show "1,500 XP to PEAK":
+
+```json
+{ "tier": "RIDGE", "overallLevel": 6, "totalXp": 3851.57, "percentile": 0.2222, "position": 3, "totalUsers": 9,
+  "updatedAt": "2026-10-20T04:12:01.2", "ranked": true,
+  "tierCutoffXp": 3851.57, "nextTier": "PEAK", "xpToNextTier": 2492.80 }
+```
+| Field | Notes |
+|---|---|
+| `ranked` | always `true` on a card |
+| `tierCutoffXp` | the lowest XP currently held by anyone in the caller's tier (the effective floor for staying in it) |
+| `nextTier` | the next **better** tier that currently has members — a tier nobody occupies can't be reached by earning XP, so it is skipped. `null` at `SUMMIT` (or if no better tier is populated) |
+| `xpToNextTier` | XP needed to match the lowest member of `nextTier`; never negative; `null` when `nextTier` is `null` |
+
+These come from the same snapshot as the rest of the card, so they are at most one recompute (5 min) stale, and approximate by nature: tiers are assigned by **relative position** (a top-fraction percentile), so as other users earn XP every boundary moves. `percentile` is unchanged: a **top** fraction where `0` is the best.
+
+**Unranked callers.** By default a caller who hasn't been ranked yet still gets `404` (clients depend on it). Passing `?allowUnranked=true` opts in to `200 {"ranked": false}` instead, so a client need not treat a `404` as "not an error". The default will only be flipped once the frontend has moved.
 
 ---
 

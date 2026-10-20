@@ -71,6 +71,22 @@ Every read (`/me`, `/{tier}/leaderboard`, `/me/leaderboard`, the distribution) h
 only — no cross-user aggregation happens on the request path. The batch is the only place that does the
 expensive O(N) work.
 
+### The rank nudge on `GET /ranks/me`
+
+The card also carries `tierCutoffXp`, `nextTier` and `xpToNextTier`, so a result screen can say "1,500
+XP to PEAK". They come from one grouped query over the snapshot (`findTierFloors`: the lowest XP in
+every *populated* tier) rather than from the tier definitions, because tiers are assigned by relative
+position, not by XP thresholds: there is no fixed "XP you need for PEAK". The honest answer is "match the
+weakest member of the next tier up", which is what `xpToNextTier` reports.
+
+Two consequences worth knowing. An **empty tier is skipped**: nobody occupies it, so no amount of XP
+reaches it, and the next *populated* better tier is reported instead. And the numbers **move** — every
+boundary shifts as other users earn XP — so they are only as fresh as the last recompute and should be
+presented as a nudge, not a promise. `percentile` is untouched (a top fraction; `0` is best).
+
+An unranked caller still gets `404` by default; `?allowUnranked=true` opts in to `200 {"ranked": false}`,
+so the default can be flipped once the frontend no longer treats the `404` specially.
+
 ## Key classes & code
 
 **`RankTier`** (`gamification-service/.../dao/RankTier.java`) is the single authoritative percentile→tier mapping. Each of the 9 tiers carries its `[lo, hi)` band;
