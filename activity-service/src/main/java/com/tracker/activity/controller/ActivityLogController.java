@@ -1,9 +1,11 @@
 package com.tracker.activity.controller;
 
+import com.tracker.activity.domain.ActivityLogQuery;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.NaturalLogDraftResponse;
 import com.tracker.activity.dto.NaturalLogRequest;
+import com.tracker.activity.dto.PagedResponse;
 import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.service.ActivityLogService;
 import com.tracker.activity.service.NaturalLogService;
@@ -48,10 +50,31 @@ public class ActivityLogController {
     }
 
     // #79/#88: ownership enforced against the trusted header inside the service.
-    @GetMapping("/user/{id}")
+    //
+    // The UNPAGED read: a bare array of every log, exactly as it has always been. It only matches
+    // when none of the new query parameters is present, so "unpaged keeps working" is guaranteed by
+    // routing rather than by an if-statement -- passing any of them selects the paged handler below.
+    @GetMapping(value = "/user/{id}", params = {"!page", "!size", "!sort", "!activityId", "!from", "!to"})
     public ResponseEntity<List<ActivityLogResponse>> getAllActivityForUser(@RequestHeader("userId") Long callerUserId,
                                                                             @PathVariable("id") Long id) {
         return activityLogService.getAllActivityForUser(callerUserId, id);
+    }
+
+    // The PAGED read, selected by the presence of any of page, size, sort, activityId, from, to.
+    // Returns an envelope {content, page, size, totalElements, totalPages, sort}, not a bare array.
+    // Raw strings, so a bad value is a 400 ProblemDetail naming the parameter (see ActivityLogQuery).
+    @GetMapping("/user/{id}")
+    public ResponseEntity<PagedResponse<ActivityLogResponse>> getActivityForUserPaged(
+            @RequestHeader("userId") Long callerUserId,
+            @PathVariable("id") Long id,
+            @RequestParam(name = "page", required = false) String page,
+            @RequestParam(name = "size", required = false) String size,
+            @RequestParam(name = "sort", required = false) String sort,
+            @RequestParam(name = "activityId", required = false) String activityId,
+            @RequestParam(name = "from", required = false) String from,
+            @RequestParam(name = "to", required = false) String to) {
+        return activityLogService.getActivityForUserPaged(callerUserId, id,
+                ActivityLogQuery.parse(page, size, sort, activityId, from, to));
     }
 
     // #80/#88: ownership enforced against the trusted header inside the service.
