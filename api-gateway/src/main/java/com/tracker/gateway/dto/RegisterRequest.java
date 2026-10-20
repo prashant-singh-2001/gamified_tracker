@@ -25,6 +25,7 @@ public record RegisterRequest(
         String firstName,
         @NotBlank(message = "lastName is required")
         String lastName,
+        @NotBlank(message = "email is required")
         @Email(message = "email should be formatted and required")
         String email,
         @NotBlank(message = "password is required")
