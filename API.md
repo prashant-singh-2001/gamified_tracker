@@ -453,11 +453,40 @@ design writeup, including the in-memory-aggregation trade-off and known gaps.
 |--------|------|------|-------------|
 | `GET` | `/api/activitylog/analytics/user/{userId}/category-summary` | authenticated, **owner-only (#88)** | totals per `Category`: `totalDurationMinutes`, `totalXpEarned`, `totalSessions`. `{userId}` must be the caller's own or `403` |
 | `GET` | `/api/activitylog/analytics/user/{userId}/xp-over-time?days=7` | authenticated, **owner-only (#88)** | one `{date, totalXpEarned, totalDurationMinutes}` entry per day in the window, **zero-filled** — always returns exactly `days` entries regardless of how many have logs |
-| `GET` | `/api/activitylog/analytics/user/{userId}/weekly-report` | authenticated, **owner-only (#88)** | `currentWeekXp`, `previousWeekXp`, `percentageChange` (`100.0` if the previous week was `0` and this week isn't, `0.0` if both are `0`), `totalActiveMinutes`, `topCategory` (`null` if the week has no logs), `dailyBreakdown` (7 zero-filled entries for the current week) |
+| `GET` | `/api/activitylog/analytics/user/{userId}/weekly-report[?mode=calendar]` | authenticated, **owner-only (#88)** | `currentWeekXp`, `previousWeekXp`, `percentageChange` (`100.0` if the previous week was `0` and this week isn't, `0.0` if both are `0`), `totalActiveMinutes`, `topCategory` (`null` if the week has no logs), `dailyBreakdown` (7 zero-filled entries), plus `mode` and the windows used — see [Weekly report modes](#weekly-report-modes) |
 | `GET` | `/api/activitylog/analytics/user/{userId}/best-time-of-day` | authenticated, **owner-only** | issue #72 — "analytics, not ML": a `GROUP BY hour_of_day` over all-time logs, not a rolling window. See below |
 
 The first three were previously open reads (`{userId}` could be anyone) — fixed alongside #76–80.
 `best-time-of-day` shipped after that fix and reuses the same guard from day one.
+
+#### Weekly report modes
+
+`weekly-report` takes an optional `?mode=`, case-insensitive:
+
+| `mode` | The "week" is | Default? |
+|---|---|---|
+| `rolling` | the **last seven days ending today** (today−6 … today), against the seven before them | **yes** — what you get with no parameter, exactly as before |
+| `calendar` | the **Monday-to-Sunday** week containing today, against the same weekdays of the previous week | no |
+
+An unknown value is a `400` `ProblemDetail` (`"mode must be one of: rolling, calendar (got 'monthly')"`) — never a silent fallback. Days are bucketed by log **start date** in the server's calendar (the services run on UTC), unchanged.
+
+**Both modes compare two windows of the same length.** A calendar report on a Tuesday would otherwise compare "this week so far" (two days) with a *full* previous week and read as a slump every Monday-to-Saturday. So on Tuesday it compares Mon–Tue with last week's Mon–Tue. On Sunday that is the whole week against the whole previous week. The response says exactly which days it used:
+
+```json
+{ "currentWeekXp": 200.0, "previousWeekXp": 100.0, "percentageChange": 100.0,
+  "totalActiveMinutes": 135, "topCategory": "STUDY",
+  "dailyBreakdown": [ {"date":"2026-01-05",...}, ... 7 entries, Monday..Sunday ... ],
+  "mode": "CALENDAR",
+  "periodStart": "2026-01-05", "periodEnd": "2026-01-11",
+  "previousPeriodStart": "2025-12-29", "previousPeriodEnd": "2025-12-31" }
+```
+| New field | Meaning |
+|---|---|
+| `mode` | `ROLLING` or `CALENDAR` |
+| `periodStart` / `periodEnd` | first and last day **shown**: rolling is today−6…today; calendar is Monday…Sunday, so days after today are present in `dailyBreakdown` with zero XP and a client can draw all seven columns |
+| `previousPeriodStart` / `previousPeriodEnd` | the window `previousWeekXp` covers (equal in length to the current window up to today) |
+
+`dailyBreakdown` always has exactly seven entries in both modes. The AI digest (`/api/insights/weekly`) delegates to the **rolling** report and is unchanged.
 
 **`GET .../best-time-of-day` response:**
 | Field | Type | Notes |
@@ -609,7 +638,7 @@ Aggregates activity logs for a user grouped by category (`STUDY`, `WORK`, `GAMIN
 Calculates daily XP earned and total active minutes for the specified window (default 7 days). Returns JSON array of daily breakdown objects.
 
 #### `GET /activitylog/analytics/user/{userId}/weekly-report`
-Generates a comprehensive weekly report comparing current week vs previous week XP, percentage change, total active minutes, top category, and a 7-day daily breakdown.
+Generates a comprehensive weekly report comparing current week vs previous week XP, percentage change, total active minutes, top category, and a 7-day daily breakdown. Accepts `?mode=rolling` (default, the last seven days) or `?mode=calendar` (Monday to Sunday) -- see [Weekly report modes](#weekly-report-modes). Both compare equal-length windows and the response names them (`periodStart`, `periodEnd`, `previousPeriodStart`, `previousPeriodEnd`).
 
 #### `GET /activitylog/analytics/user/{userId}/best-time-of-day`
 Issue #72. Groups all-time logs by hour of day (`0`–`23`, zero-filled). Returns `hourlyBreakdown` plus three derived fields — `bestHour`, `bestCategory`, `bestCategoryHour` — same shape as the Gateway's `GET /api/activitylog/analytics/user/{userId}/best-time-of-day` above.
