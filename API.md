@@ -233,7 +233,7 @@ Records an activity session and computes XP (with a chance of a bonus roll). Req
 | `createdAt` | ISO-8601 datetime string | |
 | `bonusApplied` | boolean | `true` if the ~20% bonus roll succeeded for this session |
 | `bonusMultiplier` | double | the multiplier actually used — `1.0` if no bonus, else the rolled `[1.1, 1.5)` value (same value baked into `xpEarned` above) |
-| `leveledUp` | boolean | **Always `false` on this response.** XP is now applied asynchronously by the Gamification Service's RabbitMQ consumer, so whether this session leveled the user up isn't known yet at write time. Poll `GET /api/level/user/{id}` shortly after (or watch the level-up notification feed) for the real value. |
+| `leveledUp` | boolean | **Always `false` on this response.** XP is now applied asynchronously by the Gamification Service's RabbitMQ consumer, so whether this session leveled the user up isn't known yet at write time. Poll [`GET /api/activitylog/{id}/outcome`](#get-apiactivitylogidoutcome) (this response's `id`) for the real value. |
 | `reviewStatus` | String enum | (#67) `CLEARED` (default — XP applies normally), `FLAGGED` (statistical outlier or over `absolute-flag-minutes`; the outbox row was **not** written, so this session's XP will not reach the leaderboard until a maintainer approves it — see [Session Integrity Review](#session-integrity-review-admin) below), `APPROVED`/`REJECTED` (a maintainer's decision on a previously-`FLAGGED` log; never the value on a fresh `POST` response) |
 | `nameResolution` | object \| null | (#66) present **only** when `activityName` didn't match exactly and was fuzzy-resolved to a different one: `{ requestedName, resolvedName, score }`. `null` on an exact match — the substitution is never silent |
 
@@ -267,6 +267,27 @@ Issue #70. Turns one free-text sentence ("studied Spring Boot for 90 minutes thi
 | `suggestions` | array | ranked alternatives when nothing resolved confidently enough for `nameResolution` — same shape as the `404` on `POST /api/activitylog` |
 
 Has its own `natural-log.enabled` feature flag, but shares the same `spring.ai.model.chat` backend selector as the AI Weekly Coaching Digest — no separate backend to run. See [Natural-Language Activity Logging](docs/features/natural-language-logging.md).
+
+---
+
+#### `GET /api/activitylog/{id}/outcome`
+What applying this log's XP did — typically ready about a second after the `POST`. This is how a client learns whether a log leveled the user up, since `POST`'s own `leveledUp` is always `false`. Served by the Gamification Service (the gateway routes exactly this path there; everything else under `/api/activitylog` goes to the Activity Service). Requires a token; the caller is identified by it, not by a parameter.
+
+**Response:** always `200 OK` with the same five keys:
+```json
+{ "status": "APPLIED", "xpApplied": 144.0, "leveledUp": true, "newLevel": 2, "previousLevel": 1 }
+```
+```json
+{ "status": "PENDING", "xpApplied": null, "leveledUp": null, "newLevel": null, "previousLevel": null }
+```
+| Field | Notes |
+|---|---|
+| `status` | `APPLIED` once gamification has applied the XP; otherwise `PENDING` |
+| `xpApplied` | XP added by this log (equals the `POST` response's `xpEarned`) |
+| `leveledUp` | `newLevel > previousLevel` |
+| `newLevel`, `previousLevel` | the **activity's** level after/before this log — the same level a level-up notification reports, not the overall level. A user's first award has `previousLevel` 1 |
+
+`PENDING` means *XP has not been applied* and covers: still in flight (poll again), **held for review** (`reviewStatus` `FLAGGED` on the `POST` response — it stays `PENDING` until a maintainer approves it, and forever if rejected, so check `reviewStatus` before polling), an id that **doesn't exist**, and an id that **isn't yours**. The last two are deliberately indistinguishable from a real pending log so the endpoint can't be used to probe other users' logs. `400` for a non-numeric id, `401` without a token. Logs applied before this endpoint existed have no outcome and read `PENDING`.
 
 ---
 

@@ -65,6 +65,12 @@ Because this runs inside the same `@Transactional` method as the XP accumulation
 [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)), a notification can never be created
 for a level-up that didn't actually commit, and vice versa.
 
+The `GET /notifications` payload (`LevelUpEventDto`) carries both `oldLevel` and `newLevel`. Note
+`oldLevel` is `null` for a user's *first* level-up on an activity (the tracker had no level yet),
+whereas `GET /activitylog/{id}/outcome` normalises that to `previousLevel: 1`. To learn whether one
+specific log leveled the user up, prefer that endpoint to scanning this feed — see
+[FLOWS § 12a](../FLOWS.md#12a-per-log-outcome--get-activitylogidoutcome).
+
 ### 2. A deliberate JPA naming fix — `LevelUpEvent.read`
 
 ```java
