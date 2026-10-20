@@ -614,7 +614,7 @@ Rows on `GET /api/leaderboard`, `GET /api/leaderboard/activity/{id}`, `GET /api/
 
 ### Ranks
 
-A separate, materialized ranking system from Leaderboard above — percentile-based tiers
+A separate, materialized ranking system from Leaderboard above — percentile-based tiers, each split into three divisions, computed from recent form rather than lifetime XP (see [Fluid ranks](#fluid-ranks-score-divisions-movement))
 (`SUMMIT`…`BASECAMP`) recomputed on a schedule into `user_rank`, so reads here are O(1) rather than
 a live aggregate query. See [Rank & Level System](docs/features/rank-and-level-system.md).
 
@@ -624,7 +624,7 @@ a live aggregate query. See [Rank & Level System](docs/features/rank-and-level-s
 | `GET` | `/api/ranks/{tier}/leaderboard?page=0&size=20` | authenticated | members of one tier (`SUMMIT`, `PEAK`, `RIDGE`, `ALPINE`, `ASCENT`, `HIGHLAND`, `FOOTHILL`, `TRAILHEAD`, `BASECAMP`), each `{withinRankPosition, userId, totalXp, overallLevel, tier, displayName}` |
 | `GET` | `/api/ranks/me/leaderboard?page=0&size=20` | authenticated | same shape, scoped to the caller's own tier. `404` if the caller has no rank yet |
 | `GET` | `/api/ranks` | authenticated | tier distribution: array of `{tier, userCount}` |
-| `POST` | `/api/ranks/recompute` | **ADMIN** | forces an off-schedule recompute (normally runs every `ranking.recompute-interval-ms`, default 5 min). Returns `{"rankedUsers": <int>}`. Gated `hasRole("ADMIN")` at the gateway (issue #83); any other role gets `403` |
+| `POST` | `/api/ranks/recompute` | **ADMIN** | forces an off-schedule recompute (normally runs every `ranking.recompute-interval-ms`, default 30 seconds). Returns `{"rankedUsers": <int>}`. Gated `hasRole("ADMIN")` at the gateway (issue #83); any other role gets `403` |
 
 #### Rank nudge
 
@@ -642,9 +642,41 @@ a live aggregate query. See [Rank & Level System](docs/features/rank-and-level-s
 | `nextTier` | the next **better** tier that currently has members — a tier nobody occupies can't be reached by earning XP, so it is skipped. `null` at `SUMMIT` (or if no better tier is populated) |
 | `xpToNextTier` | XP needed to match the lowest member of `nextTier`; never negative; `null` when `nextTier` is `null` |
 
-These come from the same snapshot as the rest of the card, so they are at most one recompute (5 min) stale, and approximate by nature: tiers are assigned by **relative position** (a top-fraction percentile), so as other users earn XP every boundary moves. `percentile` is unchanged: a **top** fraction where `0` is the best.
+These come from the same snapshot as the rest of the card, so they are at most one recompute (30 seconds by default) stale, and approximate by nature: tiers are assigned by **relative position** (a top-fraction percentile), so as other users earn XP every boundary moves. `percentile` is unchanged: a **top** fraction where `0` is the best.
 
 **Unranked callers.** By default a caller who hasn't been ranked yet still gets `404` (clients depend on it). Passing `?allowUnranked=true` opts in to `200 {"ranked": false}` instead, so a client need not treat a `404` as "not an error". The default will only be flipped once the frontend has moved.
+
+#### Fluid ranks: score, divisions, movement
+
+A rank is a percentile of a **recency-weighted score**, not of lifetime XP: each award counts for
+`xp * 0.5^(age / 14 days)`, aged by when the session happened. A player who keeps logging holds their rank, one
+who stops sinks. `totalXp` and `overallLevel` stay lifetime figures. Ranks are recomputed every 30 seconds.
+
+`GET /api/ranks/me` gains these fields (all additive):
+
+```json
+{ "tier": "RIDGE", "totalXp": 3851.57, "percentile": 0.2222, "position": 3, "totalUsers": 9, "...": "...",
+  "rankScore": 912.4, "division": 2, "divisionProgress": 0.4,
+  "nextDivisionTier": "RIDGE", "nextDivision": 1, "xpToNextDivision": 61.3,
+  "positionChange": 4, "previousTier": "ALPINE", "previousDivision": 3, "trend": "PROMOTED" }
+```
+| Field | Notes |
+|---|---|
+| `rankScore` | the recency-weighted score the rank is computed from. XP earned now adds to it one for one |
+| `division` | `1` (best) to `3` inside the tier; each tier band is cut into equal thirds |
+| `divisionProgress` | `0..1`, how far up the current division the caller sits: 0 about to drop, 1 about to be promoted. For a progress bar |
+| `nextDivisionTier`, `nextDivision`, `xpToNextDivision` | the next **better populated** division (from division 1 that is the lowest division of the tier above) and the score needed to match its weakest member. `null` at the very top |
+| `positionChange` | places gained since the movement baseline (about a day ago); **positive is up**; `null` when there is no baseline yet |
+| `previousTier`, `previousDivision` | where the caller stood at that baseline; `null` when there is none |
+| `trend` | `NEW` (no baseline yet), `PROMOTED` / `DEMOTED` (tier or division changed), `UP` / `DOWN` / `SAME` (same step, position moved) |
+
+`tierCutoffXp`, `nextTier` and `xpToNextTier` keep their names and meaning but are now measured in `rankScore`.
+Rows on `GET /api/ranks/{tier}/leaderboard` and `/me/leaderboard` add `rankScore`, `division`, `positionChange`
+and `trend`, and are **ordered by `rankScore`** (their `totalXp` is lifetime XP).
+
+The baseline resets when it ages past the movement window (24 hours by default), so `positionChange` is
+"recent movement", not an exact delta, and drops back toward 0 when the baseline rolls. `positionChange` counts absolute places while `trend` compares tier and division (a percentile), so when many users join the table they can disagree, for example a negative `positionChange` with a `PROMOTED` trend; show whichever fits the screen. XP applied before the
+per-log outcome table existed has no session time and does not count toward the score.
 
 ---
 

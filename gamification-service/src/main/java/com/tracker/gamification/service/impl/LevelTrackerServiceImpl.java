@@ -111,9 +111,13 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     // GET /activitylog/{id}/outcome can answer without anyone polling notifications. A rollback
     // (e.g. the idempotency guard losing a race) takes the outcome row with it.
     @Override
-    public LevelTrackerDto saveForLog(Long logId, Long userId, LevelTrackerRequestDTO dto) {
+    public LevelTrackerDto saveForLog(Long logId, Long userId, LevelTrackerRequestDTO dto, LocalDateTime occurredAt) {
         XpApplication applied = applyXp(userId, dto);
         LevelTrackerDto tracker = applied.tracker();
+        // When the session happened, for rank scoring. Never later than now (clock skew or a bad producer
+        // cannot make XP look fresher than it is); a producer that does not send one gets applied-at.
+        LocalDateTime appliedAt = LocalDateTime.now();
+        LocalDateTime sessionTime = occurredAt == null || occurredAt.isAfter(appliedAt) ? appliedAt : occurredAt;
         logXpOutcomeRepository.save(LogXpOutcome.builder()
                 .logId(logId)
                 .userId(userId)
@@ -122,7 +126,8 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
                 .previousLevel(applied.previousLevel())
                 .newLevel(tracker.level())
                 .leveledUp(tracker.leveledUp())
-                .appliedAt(LocalDateTime.now())
+                .appliedAt(appliedAt)
+                .occurredAt(sessionTime)
                 .build());
         return tracker;
     }

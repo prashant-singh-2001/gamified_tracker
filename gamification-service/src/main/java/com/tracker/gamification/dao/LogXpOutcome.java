@@ -36,6 +36,10 @@ public class LogXpOutcome implements Persistable<Long> {
     private boolean leveledUp;
     private LocalDateTime appliedAt;
 
+    // When the session happened (the producer sends the log end time). Rank scoring ages XP by this, not
+    // by appliedAt, so a backdated or late-approved log counts from its session time.
+    private LocalDateTime occurredAt;
+
     // Same trap ProcessedEvent documents (#82): a manually-assigned @Id with no @GeneratedValue /
     // @Version makes Spring Data's default isNew() always false, so save() would compile to a
     // merge() (an extra SELECT, and a silent UPDATE instead of a failing INSERT on a duplicate).

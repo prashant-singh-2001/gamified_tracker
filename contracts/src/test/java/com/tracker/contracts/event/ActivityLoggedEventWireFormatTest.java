@@ -15,7 +15,7 @@ class ActivityLoggedEventWireFormatTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
-    @DisplayName("serializes to exactly the four agreed field names")
+    @DisplayName("serializes to exactly the five agreed field names")
     void serializesToAgreedFieldNames() throws Exception {
         var json = mapper.readTree(
                 mapper.writeValueAsString(new ActivityLoggedEvent(42L, 1L, 2L, 30.0)));
@@ -24,7 +24,7 @@ class ActivityLoggedEventWireFormatTest {
         // unpublished outbox_event.payload row, which stores this same JSON.
         Set<String> fields = new HashSet<>();
         json.fieldNames().forEachRemaining(fields::add);
-        assertEquals(Set.of("logId", "userId", "activityId", "xpEarned"), fields);
+        assertEquals(Set.of("logId", "userId", "activityId", "xpEarned", "occurredAtEpochMilli"), fields);
 
         assertEquals(42L, json.get("logId").asLong());
         assertEquals(1L, json.get("userId").asLong());
@@ -44,6 +44,27 @@ class ActivityLoggedEventWireFormatTest {
         assertEquals(1L, event.userId());
         assertEquals(2L, event.activityId());
         assertEquals(30.0, event.xpEarned());
+    }
+
+    @Test
+    @DisplayName("JSON without occurredAtEpochMilli (in-flight messages, old outbox rows) still deserializes, as null")
+    void legacyJsonWithoutSessionTimeStillReads() throws Exception {
+        // The shape published before the field existed: it must keep working through a rolling deploy.
+        var event = mapper.readValue(
+                "{\"logId\":42,\"userId\":1,\"activityId\":2,\"xpEarned\":30.0}",
+                ActivityLoggedEvent.class);
+
+        assertNull(event.occurredAtEpochMilli());
+    }
+
+    @Test
+    @DisplayName("occurredAtEpochMilli round-trips; the four-argument constructor leaves it null")
+    void sessionTimeRoundTrips() throws Exception {
+        var json = mapper.writeValueAsString(new ActivityLoggedEvent(42L, 1L, 2L, 30.0, 1_760_000_000_000L));
+        var back = mapper.readValue(json, ActivityLoggedEvent.class);
+
+        assertEquals(1_760_000_000_000L, back.occurredAtEpochMilli());
+        assertNull(new ActivityLoggedEvent(1L, 1L, 1L, 0.0).occurredAtEpochMilli());
     }
 
     @Test

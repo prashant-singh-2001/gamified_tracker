@@ -28,7 +28,7 @@ public interface LevelTrackerService {
     // The event-driven path (ActivityLoggedListener): same XP application as save(), plus the
     // per-log outcome row (xp applied, activity level before/after) written in the same
     // transaction -- it is what GET /activitylog/{id}/outcome serves.
-    LevelTrackerDto saveForLog(Long logId, Long userId, LevelTrackerRequestDTO dto);
+    LevelTrackerDto saveForLog(Long logId, Long userId, LevelTrackerRequestDTO dto, java.time.LocalDateTime occurredAt);
 
     // #74: the only production caller left for save() directly is ActivityLoggedListener.
     // POST /level (admin-only, see SecurityConfig) now goes through this instead, which

@@ -368,7 +368,7 @@ sequenceDiagram
         alt PK conflict (race)
             AL-->>MQ: rollback, redeliver
         else inserted
-            AL->>LT: saveForLog(logId, userId, activityId, xp)
+            AL->>LT: saveForLog(logId, userId, activityId, xp, occurredAt)
             LT->>DB: insertIfAbsent + SELECT ... FOR UPDATE
             LT->>DB: totalXp += xp  (point of no return)
             LT->>LT: resolveLevel (explicit thresholds, else default curve)
@@ -410,7 +410,7 @@ using the old class-name header, a deliberate rolling-deploy safety net
 |---|---|---|
 | 1 | `existsById(logId)` fast path | already processed → return, no-op (redelivery) |
 | 2 | `processedEventRepository.save(new ProcessedEvent(logId, now))` — the **unique PK is what actually serializes a race**, not the check in step 1 | insert conflict (a racing duplicate delivery) → this save throws → **whole transaction rolls back, XP not applied** → message redelivered → step 1 now finds it → skipped |
-| 3 | `levelTrackerService.saveForLog(logId, userId, ...)` — applies the XP (steps 11-12) and records the per-log outcome in the same transaction | — |
+| 3 | `levelTrackerService.saveForLog(logId, userId, ..., occurredAt)` — applies the XP (steps 11-12) and records the per-log outcome in the same transaction. `occurredAt` is the event session end (UTC epoch millis, optional): it becomes `log_xp_outcome.occurred_at`, which rank scoring ages XP by (flow 15); missing means "now", a future time is clamped to now | — |
 
 ### 11. XP application & level resolution
 
@@ -497,16 +497,27 @@ stateDiagram-v2
 
 ### 15. Rank recompute
 
-`@Scheduled(fixedDelayString = "${ranking.recompute-interval-ms:300000}")` (5 min default) or
+`@Scheduled(fixedDelayString = "${ranking.recompute-interval-ms:30000}")` (30 s default) or
 on-demand `POST /ranks/recompute` (**ADMIN-gated at the gateway**, issue 83: it is a
-maintenance operation, not a user action) → `RankRecomputeServiceImpl.recompute` (`RankRecomputeServiceImpl.java:28-72`), guarded by
-`@SchedulerLock` (issue #82 — same class of race as the outbox relay above; the lock also covers
-the on-demand path since both go through this same bean method): reads all `level_tracker` totals,
-dense-ranks ties (equal `totalXp` shares a position), computes `topFraction = (position-1)/totalUsers`,
-maps to a `RankTier` (`RankTier.fromTopFraction`, 9 tiers `SUMMIT`→`BASECAMP`), upserts `user_rank`.
-Fully derived from `level_tracker` — self-heals on the next tick if the source data changes. →
-[Rank & Level System](features/rank-and-level-system.md),
+maintenance operation, not a user action) → `RankRecomputeServiceImpl.recompute`, guarded by
+`@SchedulerLock` (issue #82 — same class of race as the outbox relay above; `lockAtMostFor` is
+`ranking.lock-at-most-for`, kept below the interval; the lock also covers the on-demand path since both go
+through this same bean method). Since issue #135 a rank is **recent form**, not lifetime XP:
+
+| # | Step | Can stop here? |
+|---|---|---|
+| 1 | Read every user lifetime total from `level_tracker` (`findAllUserTotals`) | no users → return 0 |
+| 2 | Read the recent awards from `log_xp_outcome` (by `occurred_at`, the session time) and `manual_xp_award`, back eight half-lives only | |
+| 3 | Score each user: sum of `xp * 0.5^(age / half-life)` (default 14 days, `RankScore`) | |
+| 4 | Order by score, then lifetime XP; **dense-rank** (only users equal on both keys share a position) | |
+| 5 | `topFraction = (position-1)/totalUsers` → `RankTier.fromTopFraction` (9 tiers) and `divisionFor` (3 divisions) | |
+| 6 | Movement baseline: carried forward while younger than `ranking.movement-window-hours` (24), rolled to the pre-update state once older, absent for a first-time user | |
+| 7 | Upsert `user_rank` (native `ON CONFLICT`, schema-qualified with `{h-schema}`) with score, division and baseline | |
+
+Fully derived from `level_tracker` and the award tables — self-heals on the next tick if the source data
+changes. → [Rank & Level System](features/rank-and-level-system.md),
 [Distributed Scheduler Locking](features/distributed-scheduler-locking.md).
+
 
 ### 16. Read flows
 
@@ -516,7 +527,7 @@ Kept deliberately shallow — controller → service → repository → DTO, no 
 |---|---|---|
 | Level / progress | `GET /level/user/{userId}`, `/level/activity/{activityId}` | batched threshold lookup for list endpoints (`mapAll`, one query not N) vs single-row `progressFor` |
 | **Leaderboard** | `GET /leaderboard`, `/leaderboard/activity/{id}`, `/leaderboard/me` | **computed live**: `SUM(level_tracker.total_xp) GROUP BY user_id` on every request (`LeaderboardServiceImpl.java:21-23`) |
-| **Ranks** | `GET /ranks/me[?allowUnranked=true]`, `/ranks/{tier}/leaderboard`, `/ranks` | **read from the materialized snapshot** written by flow 15 (`RankServiceImpl.java` — `userRankRepository` reads only). `/ranks/me` also carries the rank nudge (`tierCutoffXp`, `nextTier`, `xpToNextTier`); an unranked caller still gets `404` unless `allowUnranked=true`, which answers `200 {"ranked": false}` |
+| **Ranks** | `GET /ranks/me[?allowUnranked=true]`, `/ranks/{tier}/leaderboard`, `/ranks` | **read from the materialized snapshot** written by flow 15 (`RankServiceImpl.java` — `userRankRepository` reads only). `/ranks/me` carries the rank nudge (`tierCutoffXp`, `nextTier`, `xpToNextTier`), the division fields (`division`, `divisionProgress`, `nextDivision`, `xpToNextDivision`) and movement (`positionChange`, `trend`); tier boards are ordered by `rank_score`; an unranked caller still gets `404` unless `allowUnranked=true`, which answers `200 {"ranked": false}` |
 | Notifications | `GET /notifications`, `/unread-count` (`{"count": n}`), `POST /{id}/read`, `POST /read-all` (one `UPDATE ... WHERE is_read = false`, returns `{"updated": n}`) | reads/marks `level_up_event` rows from flow 12 |
 | Streaks | `GET /activitylog/streaks/user/{id}` | reads `activity_streak`, mutated only by flow 9 step 8. `active` is **computed on read**: last activity today or yesterday in UTC (the stored `currentStreak` is only reset by the next log, so it goes stale after a gap) |
 | Analytics | `GET /activitylog/analytics/user/{userId}/{category-summary,xp-over-time,weekly-report,best-time-of-day}` | in-memory stream aggregation over raw logs; `weekly-report` takes `?mode=rolling` (default) or `calendar` (Monday to Sunday) — → [Analytics](features/analytics.md) |

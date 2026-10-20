@@ -43,17 +43,56 @@ public class UserRankRepositoryTest {
     }
 
     @Test
-    void findByTierOrderByTotalXpDesc_returnsOnlyThatTier_orderedByXp() {
+    void findByTierOrderByRankScoreDesc_returnsOnlyThatTier_orderedByScore() {
         userRankRepository.save(rank(2L, RankTier.PEAK, 300.0));
         userRankRepository.save(rank(3L, RankTier.PEAK, 500.0));
         userRankRepository.save(rank(4L, RankTier.RIDGE, 999.0));
 
         List<UserRank> peakMembers =
-                userRankRepository.findByTierOrderByTotalXpDesc(RankTier.PEAK, PageRequest.of(0, 10));
+                userRankRepository.findByTierOrderByRankScoreDesc(RankTier.PEAK, PageRequest.of(0, 10));
 
         assertEquals(2, peakMembers.size());
         assertEquals(3L, peakMembers.get(0).getUserId());
         assertEquals(2L, peakMembers.get(1).getUserId());
+    }
+
+    @Test
+    void findByTierOrderByRankScoreDesc_ordersByRecentScoreNotLifetimeXp() {
+        UserRank bigLifetimeLapsed = rank(21L, RankTier.PEAK, 9000.0);
+        bigLifetimeLapsed.setRankScore(40.0);
+        UserRank smallLifetimeActive = rank(22L, RankTier.PEAK, 300.0);
+        smallLifetimeActive.setRankScore(280.0);
+        userRankRepository.save(bigLifetimeLapsed);
+        userRankRepository.save(smallLifetimeActive);
+
+        List<UserRank> peak = userRankRepository.findByTierOrderByRankScoreDesc(RankTier.PEAK, PageRequest.of(0, 10));
+
+        assertEquals(22L, peak.get(0).getUserId(), "the board follows recent form");
+        assertEquals(21L, peak.get(1).getUserId());
+    }
+
+    @Test
+    void findDivisionFloors_oneRowPerPopulatedTierAndDivision_withTheLowestScore() {
+        UserRank a = rank(31L, RankTier.RIDGE, 500.0);
+        a.setDivision(1);
+        a.setRankScore(480.0);
+        UserRank b = rank(32L, RankTier.RIDGE, 400.0);
+        b.setDivision(1);
+        b.setRankScore(350.0);
+        UserRank c = rank(33L, RankTier.RIDGE, 200.0);
+        c.setDivision(2);
+        c.setRankScore(190.0);
+        userRankRepository.save(a);
+        userRankRepository.save(b);
+        userRankRepository.save(c);
+
+        var floors = userRankRepository.findDivisionFloors();
+
+        assertEquals(2, floors.size(), "RIDGE I and RIDGE II only");
+        for (var floor : floors) {
+            assertEquals(RankTier.RIDGE, floor.getTier());
+            assertEquals(floor.getDivision() == 1 ? 350.0 : 190.0, floor.getMinScore());
+        }
     }
 
     @Test
@@ -76,7 +115,7 @@ public class UserRankRepositoryTest {
 
         Map<RankTier, Double> floors = new EnumMap<>(RankTier.class);
         for (TierFloorProjection floor : userRankRepository.findTierFloors()) {
-            floors.put(floor.getTier(), floor.getMinTotalXp());
+            floors.put(floor.getTier(), floor.getMinScore());
         }
 
         assertEquals(2, floors.size(), "only populated tiers get a row");

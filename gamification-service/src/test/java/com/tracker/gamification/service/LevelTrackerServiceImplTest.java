@@ -184,7 +184,8 @@ public class LevelTrackerServiceImplTest {
                 .thenReturn(List.of(levelThreshold));
         when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(leveledUpTracker);
 
-        LevelTrackerDto result = levelTrackerService.saveForLog(42L, 1L, request);
+        java.time.LocalDateTime sessionTime = java.time.LocalDateTime.now().minusDays(2);
+        LevelTrackerDto result = levelTrackerService.saveForLog(42L, 1L, request, sessionTime);
 
         assertTrue(result.leveledUp());
         verify(logXpOutcomeRepository).save(argThat((LogXpOutcome o) ->
@@ -195,7 +196,8 @@ public class LevelTrackerServiceImplTest {
                         && o.getPreviousLevel() == 1
                         && o.getNewLevel() == 2
                         && o.isLeveledUp()
-                        && o.getAppliedAt() != null));
+                        && o.getAppliedAt() != null
+                        && o.getOccurredAt().equals(sessionTime)));
     }
 
     @Test
@@ -220,7 +222,7 @@ public class LevelTrackerServiceImplTest {
                 .thenReturn(List.of(level3));
         when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(after);
 
-        LevelTrackerDto result = levelTrackerService.saveForLog(7L, 1L, request);
+        LevelTrackerDto result = levelTrackerService.saveForLog(7L, 1L, request, null);
 
         assertFalse(result.leveledUp());
         verify(logXpOutcomeRepository).save(argThat((LogXpOutcome o) ->
@@ -228,7 +230,27 @@ public class LevelTrackerServiceImplTest {
                         && o.getXpApplied() == 50.0
                         && o.getPreviousLevel() == 3
                         && o.getNewLevel() == 3
-                        && !o.isLeveledUp()));
+                        && !o.isLeveledUp()
+                        // no session time sent: it falls back to when the XP was applied
+                        && o.getOccurredAt().equals(o.getAppliedAt())));
+    }
+
+    @Test
+    @DisplayName("saveForLog never records a session time in the future: it is clamped to when the XP was applied")
+    void saveForLog_clampsAFutureSessionTime() {
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 50.0);
+        LevelTracker existing = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).level(1).totalXp(0.0).currentLevelXp(0.0).logCount(0).build();
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L)).thenReturn(Optional.of(existing));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(50.0), any(Pageable.class))).thenReturn(List.of());
+        when(activityLevelThresholdRepository.countForActivity(1L)).thenReturn(3L);
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(existing);
+
+        levelTrackerService.saveForLog(9L, 1L, request, java.time.LocalDateTime.now().plusDays(30));
+
+        verify(logXpOutcomeRepository).save(argThat((LogXpOutcome o) ->
+                o.getOccurredAt().equals(o.getAppliedAt())));
     }
 
     @Test

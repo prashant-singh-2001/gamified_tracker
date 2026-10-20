@@ -2,6 +2,8 @@ package com.tracker.gamification.service;
 
 import com.tracker.gamification.dao.RankTier;
 import com.tracker.gamification.dao.UserRank;
+import com.tracker.gamification.domain.RankMovement;
+import com.tracker.gamification.dto.DivisionFloorProjection;
 import com.tracker.gamification.dto.RankCardDto;
 import com.tracker.gamification.dto.RankDistributionDto;
 import com.tracker.gamification.dto.RankTierMemberDto;
@@ -23,6 +25,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -54,15 +57,15 @@ public class RankServiceImplTest {
     }
 
     // A mocked repository cannot return a Spring Data projection proxy; a plain record will do.
-    private record Floor(RankTier tier, Double minTotalXp) implements TierFloorProjection {
+    private record Floor(RankTier tier, Double minScore) implements TierFloorProjection {
         @Override
         public RankTier getTier() {
             return tier;
         }
 
         @Override
-        public Double getMinTotalXp() {
-            return minTotalXp;
+        public Double getMinScore() {
+            return minScore;
         }
     }
 
@@ -136,6 +139,116 @@ public class RankServiceImplTest {
         assertEquals(0.0, rankService.getRankCard(5L).orElseThrow().xpToNextTier(), 1e-9);
     }
 
+    private record DivFloor(RankTier tier, Integer division, Double minScore) implements DivisionFloorProjection {
+        @Override
+        public RankTier getTier() {
+            return tier;
+        }
+
+        @Override
+        public Integer getDivision() {
+            return division;
+        }
+
+        @Override
+        public Double getMinScore() {
+            return minScore;
+        }
+    }
+
+    private static UserRank rankAt(Long userId, RankTier tier, int division, double score, int position, double percentile) {
+        UserRank r = new UserRank(score, 2, tier, percentile, position, 100, LocalDateTime.now(), userId);
+        r.setRankScore(score);
+        r.setDivision(division);
+        return r;
+    }
+
+    @Test
+    @DisplayName("division nudge: the next step is the next division up inside the tier")
+    void getRankCard_divisionNudge_withinTheTier() {
+        // RIDGE II on score 300; RIDGE I is populated and its weakest member holds 340
+        when(userRankRepository.findByUserId(1L)).thenReturn(Optional.of(rankAt(1L, RankTier.RIDGE, 2, 300.0, 20, 0.20)));
+        when(userRankRepository.findDivisionFloors()).thenReturn(List.of(
+                new DivFloor(RankTier.RIDGE, 1, 340.0), new DivFloor(RankTier.RIDGE, 2, 280.0)));
+
+        RankCardDto card = rankService.getRankCard(1L).orElseThrow();
+
+        assertEquals(2, card.division());
+        assertEquals(RankTier.RIDGE, card.nextDivisionTier());
+        assertEquals(1, card.nextDivision());
+        assertEquals(40.0, card.xpToNextDivision(), 1e-9);
+        assertEquals(300.0, card.rankScore(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("division nudge: from division 1 the next step is the lowest division of the better tier; empty divisions are skipped")
+    void getRankCard_divisionNudge_crossesIntoTheBetterTier() {
+        // RIDGE I on 500. PEAK III is empty, so the next reachable step is PEAK II (floor 650).
+        when(userRankRepository.findByUserId(2L)).thenReturn(Optional.of(rankAt(2L, RankTier.RIDGE, 1, 500.0, 5, 0.16)));
+        when(userRankRepository.findDivisionFloors()).thenReturn(List.of(
+                new DivFloor(RankTier.PEAK, 2, 650.0), new DivFloor(RankTier.RIDGE, 1, 480.0)));
+
+        RankCardDto card = rankService.getRankCard(2L).orElseThrow();
+
+        assertEquals(RankTier.PEAK, card.nextDivisionTier());
+        assertEquals(2, card.nextDivision());
+        assertEquals(150.0, card.xpToNextDivision(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("division nudge: at the very top there is nothing above; progress is 0..1 up the current division")
+    void getRankCard_divisionNudge_topAndProgress() {
+        // SUMMIT is [0, 0.05): thirds of width 1/60. f = 0.01 is division 1, 0.6 of the way through it
+        // counted from the best edge, so 0.4 up it... progress = 1 - 0.6 = 0.4.
+        when(userRankRepository.findByUserId(3L)).thenReturn(Optional.of(rankAt(3L, RankTier.SUMMIT, 1, 900.0, 1, 0.01)));
+
+        RankCardDto card = rankService.getRankCard(3L).orElseThrow();
+
+        assertNull(card.nextDivisionTier());
+        assertNull(card.nextDivision());
+        assertNull(card.xpToNextDivision());
+        assertEquals(0.4, card.divisionProgress(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("movement: positionChange and trend come from the stored baseline; no baseline is NEW")
+    void getRankCard_movement() {
+        UserRank improving = rankAt(4L, RankTier.ALPINE, 2, 300.0, 10, 0.3);
+        improving.setPreviousTier(RankTier.ALPINE);
+        improving.setPreviousDivision(2);
+        improving.setPreviousPosition(16);
+        when(userRankRepository.findByUserId(4L)).thenReturn(Optional.of(improving));
+        when(userRankRepository.findByUserId(5L)).thenReturn(Optional.of(rankAt(5L, RankTier.ALPINE, 2, 300.0, 10, 0.3)));
+
+        RankCardDto up = rankService.getRankCard(4L).orElseThrow();
+        RankCardDto fresh = rankService.getRankCard(5L).orElseThrow();
+
+        assertEquals(6, up.positionChange());
+        assertEquals(RankMovement.Trend.UP, up.trend());
+        assertEquals(RankTier.ALPINE, up.previousTier());
+        assertEquals(2, up.previousDivision());
+        assertNull(fresh.positionChange());
+        assertEquals(RankMovement.Trend.NEW, fresh.trend());
+    }
+
+    @Test
+    @DisplayName("tier board rows carry the score, division and movement, ordered by the repository's score order")
+    void getTierLeaderboard_includesScoreAndMovement() {
+        UserRank first = rankAt(7L, RankTier.PEAK, 1, 800.0, 3, 0.1);
+        first.setPreviousTier(RankTier.RIDGE);
+        first.setPreviousDivision(3);
+        first.setPreviousPosition(9);
+        when(userRankRepository.findByTierOrderByRankScoreDesc(eq(RankTier.PEAK), any())).thenReturn(List.of(first));
+
+        var rows = rankService.getTierLeaderboard(RankTier.PEAK, 0, 20);
+
+        assertEquals(1, rows.size());
+        assertEquals(800.0, rows.get(0).rankScore(), 1e-9);
+        assertEquals(1, rows.get(0).division());
+        assertEquals(6, rows.get(0).positionChange());
+        assertEquals(RankMovement.Trend.PROMOTED, rows.get(0).trend());
+    }
+
     @Test
     @DisplayName("percentile is still reported exactly as stored -- a TOP fraction where 0 is best")
     void getRankCard_percentileIsUnchanged() {
@@ -155,7 +268,7 @@ public class RankServiceImplTest {
     @Test
     @DisplayName("getTierLeaderboard assigns 1-based within-tier positions")
     void getTierLeaderboard_assignsWithinTierPositions() {
-        when(userRankRepository.findByTierOrderByTotalXpDesc(eq(RankTier.SUMMIT), eq(PageRequest.of(0, 2))))
+        when(userRankRepository.findByTierOrderByRankScoreDesc(eq(RankTier.SUMMIT), eq(PageRequest.of(0, 2))))
                 .thenReturn(List.of(
                         rank(1L, RankTier.SUMMIT, 900.0, 1),
                         rank(2L, RankTier.SUMMIT, 850.0, 2)

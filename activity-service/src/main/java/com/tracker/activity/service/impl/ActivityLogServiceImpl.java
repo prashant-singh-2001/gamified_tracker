@@ -149,7 +149,8 @@ public class ActivityLogServiceImpl implements ActivityLogService {
         // was flagged, in which case no outbox row is written at all; approval writes it later.
         if (!flagged) {
             var event = new ActivityLoggedEvent(
-                    saved.getId(), userId, saved.getActivity().getId(), saved.getXpEarned());
+                    saved.getId(), userId, saved.getActivity().getId(), saved.getXpEarned(),
+                    sessionEndEpochMilli(saved));
             outboxEventRepository.save(OutboxEvent.builder()
                     .aggregateType("ActivityLog")
                     .aggregateId(saved.getId())
@@ -230,6 +231,16 @@ public class ActivityLogServiceImpl implements ActivityLogService {
                 .map(s -> StreakResponse.from(s, todayUtc))
                 .toList();
         return ResponseEntity.ok(streaks);
+    }
+
+    /**
+     * The session end as UTC epoch milliseconds (activity timestamps are zone-less and UTC by
+     * convention). Gamification ages XP by this, so a backdated or late-approved log counts from
+     * when the session happened, not from when it was processed.
+     */
+    static Long sessionEndEpochMilli(com.tracker.activity.dao.ActivityLog log) {
+        return log.getEndTime() == null ? null
+                : log.getEndTime().toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
     }
 
     private String toJson(ActivityLoggedEvent event) {

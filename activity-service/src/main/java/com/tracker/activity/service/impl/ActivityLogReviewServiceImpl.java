@@ -70,7 +70,8 @@ public class ActivityLogReviewServiceImpl implements ActivityLogReviewService {
         // Idempotent by the unique idempotency_key (= logId): calling approve twice on a log that
         // somehow reached APPROVED again would violate the constraint rather than double-award.
         var event = new ActivityLoggedEvent(
-                saved.getId(), saved.getUserId(), saved.getActivity().getId(), saved.getXpEarned());
+                saved.getId(), saved.getUserId(), saved.getActivity().getId(), saved.getXpEarned(),
+                ActivityLogServiceImpl.sessionEndEpochMilli(saved));
         outboxEventRepository.save(OutboxEvent.builder()
                 .aggregateType("ActivityLog")
                 .aggregateId(saved.getId())

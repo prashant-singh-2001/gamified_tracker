@@ -44,12 +44,37 @@ class ActivityLoggedListenerTest {
 
         InOrder inOrder = inOrder(processedEventRepository, levelTrackerService);
         inOrder.verify(processedEventRepository).saveAndFlush(argThat(pe -> "42".equals(pe.getIdempotencyKey())));
-        inOrder.verify(levelTrackerService).saveForLog(eq(42L), eq(1L), any(LevelTrackerRequestDTO.class));
+        inOrder.verify(levelTrackerService).saveForLog(eq(42L), eq(1L), any(LevelTrackerRequestDTO.class), any());
 
         ArgumentCaptor<LevelTrackerRequestDTO> captor = ArgumentCaptor.forClass(LevelTrackerRequestDTO.class);
-        verify(levelTrackerService).saveForLog(eq(42L), eq(1L), captor.capture());
+        verify(levelTrackerService).saveForLog(eq(42L), eq(1L), captor.capture(), any());
         assertEquals(2L, captor.getValue().activityId());
         assertEquals(30.0, captor.getValue().xp(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("the session time from the event reaches saveForLog as UTC wall-clock time")
+    void onActivityLogged_passesSessionTimeAsUtc() {
+        // 2026-10-20T08:30:00Z
+        long epoch = java.time.LocalDateTime.of(2026, 10, 20, 8, 30).toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+        ActivityLoggedEvent event = new ActivityLoggedEvent(42L, 1L, 2L, 30.0, epoch);
+        when(processedEventRepository.existsById("42")).thenReturn(false);
+
+        listener.onActivityLogged(event);
+
+        verify(levelTrackerService).saveForLog(eq(42L), eq(1L), any(LevelTrackerRequestDTO.class),
+                eq(java.time.LocalDateTime.of(2026, 10, 20, 8, 30)));
+    }
+
+    @Test
+    @DisplayName("an event without a session time (sent before the field existed) passes null, so the outcome falls back")
+    void onActivityLogged_noSessionTime_passesNull() {
+        ActivityLoggedEvent event = new ActivityLoggedEvent(42L, 1L, 2L, 30.0);
+        when(processedEventRepository.existsById("42")).thenReturn(false);
+
+        listener.onActivityLogged(event);
+
+        verify(levelTrackerService).saveForLog(eq(42L), eq(1L), any(LevelTrackerRequestDTO.class), isNull());
     }
 
     @Test
@@ -61,7 +86,7 @@ class ActivityLoggedListenerTest {
         listener.onActivityLogged(event);
 
         verify(processedEventRepository, never()).saveAndFlush(any());
-        verify(levelTrackerService, never()).saveForLog(anyLong(), anyLong(), any());
+        verify(levelTrackerService, never()).saveForLog(anyLong(), anyLong(), any(), any());
     }
 
     @Test
@@ -75,6 +100,6 @@ class ActivityLoggedListenerTest {
 
         assertThrows(DataIntegrityViolationException.class, () -> listener.onActivityLogged(event));
 
-        verify(levelTrackerService, never()).saveForLog(anyLong(), anyLong(), any());
+        verify(levelTrackerService, never()).saveForLog(anyLong(), anyLong(), any(), any());
     }
 }

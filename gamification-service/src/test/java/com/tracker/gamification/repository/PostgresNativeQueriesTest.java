@@ -1,6 +1,7 @@
 package com.tracker.gamification.repository;
 
 import com.tracker.gamification.dao.LevelTracker;
+import com.tracker.gamification.dao.RankTier;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.TimeZone;
 
@@ -70,6 +72,10 @@ class PostgresNativeQueriesTest {
     @Autowired
     private UserAchievementRepository userAchievementRepository;
     @Autowired
+    private LogXpOutcomeRepository logXpOutcomeRepository;
+    @Autowired
+    private ManualXpAwardRepository manualXpAwardRepository;
+    @Autowired
     private JdbcTemplate jdbc;
 
     @Test
@@ -107,14 +113,71 @@ class PostgresNativeQueriesTest {
     }
 
     @Test
-    @DisplayName("user_rank upsert inserts, then updates the same row")
+    @DisplayName("user_rank upsert inserts, then updates the same row, including score, division and the movement baseline")
     void rankUpsert() {
-        userRankRepository.upsert(5L, 100.0, 2, "BASECAMP", 0.5, 3, 6);
-        userRankRepository.upsert(5L, 250.0, 3, "SUMMIT", 0.25, 2, 6);
+        LocalDateTime baselineAt = LocalDateTime.of(2026, 10, 19, 12, 0);
+        userRankRepository.upsert(5L, 100.0, 2, "BASECAMP", 0.5, 3, 6, 80.0, 2, null, null, null, null);
+        userRankRepository.upsert(5L, 250.0, 3, "SUMMIT", 0.25, 2, 6, 240.0, 1, "BASECAMP", 2, 3, baselineAt);
 
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM gamification.user_rank WHERE user_id = 5", Integer.class));
         assertEquals(250.0, jdbc.queryForObject("SELECT total_xp FROM gamification.user_rank WHERE user_id = 5", Double.class));
         assertEquals(2, jdbc.queryForObject("SELECT position FROM gamification.user_rank WHERE user_id = 5", Integer.class));
+        assertEquals(240.0, jdbc.queryForObject("SELECT rank_score FROM gamification.user_rank WHERE user_id = 5", Double.class));
+        assertEquals(1, jdbc.queryForObject("SELECT division FROM gamification.user_rank WHERE user_id = 5", Integer.class));
+        assertEquals("BASECAMP", jdbc.queryForObject("SELECT previous_tier FROM gamification.user_rank WHERE user_id = 5", String.class));
+        assertEquals(3, jdbc.queryForObject("SELECT previous_position FROM gamification.user_rank WHERE user_id = 5", Integer.class));
+        assertEquals(baselineAt, jdbc.queryForObject("SELECT previous_at FROM gamification.user_rank WHERE user_id = 5", LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("user_rank upsert accepts a missing baseline (all four previous_* columns NULL)")
+    void rankUpsertWithoutBaseline() {
+        userRankRepository.upsert(6L, 10.0, 1, "ALPINE", 0.3, 4, 10, 10.0, 3, null, null, null, null);
+
+        assertNull(jdbc.queryForObject("SELECT previous_tier FROM gamification.user_rank WHERE user_id = 6", String.class));
+        assertNull(jdbc.queryForObject("SELECT previous_at FROM gamification.user_rank WHERE user_id = 6", LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("tier board orders by rank_score, and division floors group by tier and division, on real Postgres")
+    void rankScoreQueries() {
+        userRankRepository.upsert(11L, 9000.0, 1, "PEAK", 0.1, 3, 20, 40.0, 1, null, null, null, null);
+        userRankRepository.upsert(12L, 300.0, 1, "PEAK", 0.1, 3, 20, 280.0, 1, null, null, null, null);
+        userRankRepository.upsert(13L, 100.0, 1, "PEAK", 0.14, 4, 20, 90.0, 3, null, null, null, null);
+
+        var board = userRankRepository.findByTierOrderByRankScoreDesc(RankTier.PEAK, PageRequest.of(0, 10));
+        assertEquals(List.of(12L, 13L, 11L), board.stream().map(r -> r.getUserId()).toList());
+
+        var floors = userRankRepository.findDivisionFloors();
+        assertEquals(2, floors.size());
+        assertEquals(40.0, floors.stream().filter(f -> f.getDivision() == 1).findFirst().orElseThrow().getMinScore());
+        assertEquals(90.0, floors.stream().filter(f -> f.getDivision() == 3).findFirst().orElseThrow().getMinScore());
+
+        var tierFloors = userRankRepository.findTierFloors();
+        assertEquals(1, tierFloors.size());
+        assertEquals(40.0, tierFloors.get(0).getMinScore());
+    }
+
+    @Test
+    @DisplayName("recent awards are read by session time, from both log outcomes and manual awards")
+    void awardsSince() {
+        jdbc.update("INSERT INTO gamification.log_xp_outcome (log_id, user_id, activity_id, xp_applied, previous_level,"
+                + " new_level, leveled_up, applied_at, occurred_at) VALUES"
+                + " (1, 1, 1, 50, 1, 1, false, '2026-10-20 10:00:00', '2026-10-19 09:00:00'),"
+                + " (2, 1, 1, 70, 1, 1, false, '2026-10-20 10:00:00', '2026-08-01 09:00:00')");
+        jdbc.update("INSERT INTO gamification.manual_xp_award (actor_user_id, target_user_id, activity_id, xp, awarded_at)"
+                + " VALUES (99, 1, 1, 25, '2026-10-18 08:00:00'), (99, 1, 1, 30, '2026-07-01 08:00:00')");
+        LocalDateTime cutoff = LocalDateTime.of(2026, 10, 1, 0, 0);
+
+        var logs = logXpOutcomeRepository.findAwardsSince(cutoff);
+        var manual = manualXpAwardRepository.findAwardsSince(cutoff);
+
+        assertEquals(1, logs.size(), "the August session is before the cutoff, even though it was applied today");
+        assertEquals(50.0, logs.get(0).getXp());
+        assertEquals(LocalDateTime.of(2026, 10, 19, 9, 0), logs.get(0).getOccurredAt());
+        assertEquals(1, manual.size());
+        assertEquals(1L, manual.get(0).getUserId(), "an admin award counts for its target user");
+        assertEquals(25.0, manual.get(0).getXp());
     }
 
     @Test
