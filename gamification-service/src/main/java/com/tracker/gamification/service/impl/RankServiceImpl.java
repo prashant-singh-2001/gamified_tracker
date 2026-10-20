@@ -5,6 +5,7 @@ import com.tracker.gamification.dao.UserRank;
 import com.tracker.gamification.dto.RankCardDto;
 import com.tracker.gamification.dto.RankDistributionDto;
 import com.tracker.gamification.dto.RankTierMemberDto;
+import com.tracker.gamification.dto.TierFloorProjection;
 import com.tracker.gamification.repository.UserRankRepository;
 import com.tracker.gamification.service.RankService;
 import lombok.AllArgsConstructor;
@@ -12,7 +13,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.IntStream;
 
@@ -45,14 +48,43 @@ public class RankServiceImpl implements RankService {
     }
 
     private RankCardDto mapToCard(UserRank userRank) {
+        // One grouped query: the lowest XP in every POPULATED tier (an empty tier has no row).
+        Map<RankTier, Double> floors = new EnumMap<>(RankTier.class);
+        for (TierFloorProjection floor : userRankRepository.findTierFloors()) {
+            floors.put(floor.getTier(), floor.getMinTotalXp());
+        }
+
+        RankTier tier = userRank.getTier();
+
+        // The next BETTER tier that actually has members. The enum runs best-first (SUMMIT is
+        // ordinal 0), so walk towards 0. An empty tier is skipped: tiers are assigned by relative
+        // position, so there is no XP you could earn to "reach" a bracket nobody currently occupies.
+        RankTier nextTier = null;
+        Double xpToNextTier = null;
+        RankTier[] tiers = RankTier.values();
+        for (int i = tier.ordinal() - 1; i >= 0; i--) {
+            Double floor = floors.get(tiers[i]);
+            if (floor != null) {
+                nextTier = tiers[i];
+                // To match the weakest member of that tier. Never negative: a stale snapshot can put
+                // the caller at or past that floor, which is "0 more", not a negative number.
+                xpToNextTier = Math.max(0.0, floor - userRank.getTotalXp());
+                break;
+            }
+        }
+
         return new RankCardDto(
-                userRank.getTier(),
+                tier,
                 userRank.getOverallLevel(),
                 userRank.getTotalXp(),
                 userRank.getPercentile(),
                 userRank.getPosition(),
                 userRank.getTotalUsers(),
-                userRank.getUpdatedAt()
+                userRank.getUpdatedAt(),
+                true,
+                floors.get(tier),
+                nextTier,
+                xpToNextTier
         );
     }
 

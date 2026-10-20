@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 @AllArgsConstructor
 @RestController
@@ -22,11 +23,21 @@ public class RankController {
     private final RankService rankService;
     private final RankRecomputeService rankRecomputeService;
 
+    // Until the first recompute has seen the caller, there is no card. By default that is a 404, which
+    // is what existing clients key on. allowUnranked=true is an OPT-IN to the friendlier answer --
+    // 200 {"ranked": false} -- so a client can stop special-casing a 404 as "not an error". The
+    // default can be flipped once the frontend has moved; flipping it first would break them.
     @GetMapping("/me")
-    public ResponseEntity<RankCardDto> getMyRank(@RequestHeader("userId") Long userId) {
-        RankCardDto card = rankService.getRankCard(userId)
-                .orElseThrow(() -> new NoSuchElementException("No rank yet for userId: " + userId));
-        return ResponseEntity.ok(card);
+    public ResponseEntity<?> getMyRank(@RequestHeader("userId") Long userId,
+                                       @RequestParam(name = "allowUnranked", defaultValue = "false") boolean allowUnranked) {
+        Optional<RankCardDto> card = rankService.getRankCard(userId);
+        if (card.isPresent()) {
+            return ResponseEntity.ok(card.get());
+        }
+        if (allowUnranked) {
+            return ResponseEntity.ok(Map.of("ranked", false));
+        }
+        throw new NoSuchElementException("No rank yet for userId: " + userId);
     }
 
     @GetMapping("/{tier}/leaderboard")
