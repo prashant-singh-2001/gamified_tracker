@@ -144,6 +144,19 @@ Sets a new password using the token from the reset link. Public, rate limited wi
 On success every refresh token of the account is revoked, so other sessions cannot renew. An access token already issued stays valid until it expires. The new password is held to the same rule as registration (non-blank).
 ---
 
+### Users
+
+#### `GET /users/me`
+The caller's own account, so a client can show their name without having stashed it at registration (a user who registered in another browser or session otherwise has nothing but a token). Served by the gateway itself, not proxied. Requires a token; `401` without one.
+
+**Response:** `200 OK`
+```json
+{ "id": 20, "firstName": "Ava", "lastName": "Grinder", "role": "USER" }
+```
+Never includes the email or password hash. `404` `ProblemDetail` (`"User not found"`) for a valid token whose account has since been deleted.
+
+---
+
 ### Activity
 
 #### `GET /api/activity`
@@ -452,7 +465,19 @@ from `/api/ranks` below.
 | `GET` | `/api/leaderboard/activity/{activityId}?page=0&size=20` | authenticated | leaderboard scoped to one activity, same paging rule |
 | `GET` | `/api/leaderboard/me` | authenticated | the caller's own global rank as a bare integer (not wrapped in an object) |
 
-**Response shape** (paged endpoints): array of `{rank, userId, totalXp}`.
+**Response shape** (paged endpoints): array of `{rank, userId, totalXp, displayName}`. `displayName` is the user's first name plus last initial (`"Ada L."`) — see [Display names](#display-names) below.
+
+#### Display names
+
+Rows on `GET /api/leaderboard`, `GET /api/leaderboard/activity/{id}`, `GET /api/ranks/{tier}/leaderboard` and `GET /api/ranks/me/leaderboard` carry a **`displayName`**: the user's first name plus the initial of their last name (`"Ada Lovelace"` → `"Ada L."`; just `"Ada"` if there is no last name). Never the email and never the full last name.
+
+```json
+[ { "rank": 1, "userId": 20, "totalXp": 14216.63, "displayName": "Ava G." },
+  { "rank": 2, "userId": 22, "totalXp": 6344.37,  "displayName": "Chloe O." } ]
+```
+`displayName` is `null` (the key is always present) for an account that no longer exists, so a client can fall back to `"Climber #<userId>"`. The gateway adds it to the response — gamification-service never sees names — with one batched lookup per page. Only `2xx` array responses are rewritten; errors pass through untouched. `GET /api/leaderboard/me` (a bare number) and `GET /api/ranks/me` (a single card) are unchanged.
+
+> **Known issue, not caused by this:** `GET /api/leaderboard/activity/{id}` currently returns `500` on a real Postgres — its query selects `total_xp` while grouping by user (`column "total_xp" must appear in the GROUP BY clause`). The `displayName` enrichment is wired for it, but it can't be seen working until that query is fixed.
 
 ---
 
@@ -465,7 +490,7 @@ a live aggregate query. See [Rank & Level System](docs/features/rank-and-level-s
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/ranks/me` | authenticated | the caller's `RankCardDto`: `tier`, `overallLevel`, `totalXp`, `percentile`, `position`, `totalUsers`, `updatedAt`. `404` if the caller has no rank yet (never recomputed) |
-| `GET` | `/api/ranks/{tier}/leaderboard?page=0&size=20` | authenticated | members of one tier (`SUMMIT`, `PEAK`, `RIDGE`, `ALPINE`, `ASCENT`, `HIGHLAND`, `FOOTHILL`, `TRAILHEAD`, `BASECAMP`), each `{withinRankPosition, userId, totalXp, overallLevel, tier}` |
+| `GET` | `/api/ranks/{tier}/leaderboard?page=0&size=20` | authenticated | members of one tier (`SUMMIT`, `PEAK`, `RIDGE`, `ALPINE`, `ASCENT`, `HIGHLAND`, `FOOTHILL`, `TRAILHEAD`, `BASECAMP`), each `{withinRankPosition, userId, totalXp, overallLevel, tier, displayName}` |
 | `GET` | `/api/ranks/me/leaderboard?page=0&size=20` | authenticated | same shape, scoped to the caller's own tier. `404` if the caller has no rank yet |
 | `GET` | `/api/ranks` | authenticated | tier distribution: array of `{tier, userCount}` |
 | `POST` | `/api/ranks/recompute` | authenticated | forces an off-schedule recompute (normally runs every `ranking.recompute-interval-ms`, default 5 min). Returns `{"rankedUsers": <int>}`. **No admin guard** — any authenticated caller can trigger this |
