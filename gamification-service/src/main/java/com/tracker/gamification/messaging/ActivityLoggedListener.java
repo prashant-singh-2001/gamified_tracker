@@ -48,7 +48,7 @@ public class ActivityLoggedListener {
         // a genuine duplicate throws DataIntegrityViolationException here, not a silent UPDATE.
         processedEventRepository.saveAndFlush(new ProcessedEvent(key, LocalDateTime.now()));
 
-        levelTrackerService.save(event.userId(),
+        levelTrackerService.saveForLog(event.logId(), event.userId(),
                 new LevelTrackerRequestDTO(event.activityId(), event.xpEarned()));
     }
 }

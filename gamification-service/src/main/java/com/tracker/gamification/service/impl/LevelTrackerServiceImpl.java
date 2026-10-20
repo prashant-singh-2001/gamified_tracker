@@ -4,6 +4,7 @@ import com.tracker.gamification.dao.ActivityLevelThreshold;
 import com.tracker.gamification.dao.LevelTracker;
 import com.tracker.gamification.dao.LevelTrackerArchive;
 import com.tracker.gamification.dao.LevelUpEvent;
+import com.tracker.gamification.dao.LogXpOutcome;
 import com.tracker.gamification.dao.ManualXpAward;
 import com.tracker.gamification.domain.LevelCurve;
 import com.tracker.gamification.domain.LevelOutcome;
@@ -16,6 +17,7 @@ import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.LevelUpEventRepository;
+import com.tracker.gamification.repository.LogXpOutcomeRepository;
 import com.tracker.gamification.repository.ManualXpAwardRepository;
 import com.tracker.gamification.service.LevelTrackerService;
 import com.tracker.gamification.service.OverallLevelService;
@@ -43,6 +45,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final OverallLevelService overallLevelService;
     private final LevelCurve levelCurve;
     private final ManualXpAwardRepository manualXpAwardRepository;
+    private final LogXpOutcomeRepository logXpOutcomeRepository;
 
     @Override
     public List<LevelTrackerDto> findByUserId(Long callerUserId, Long userId) {
@@ -100,6 +103,36 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     // }
     @Override
     public LevelTrackerDto save(Long userId, LevelTrackerRequestDTO dto) {
+        return applyXp(userId, dto).tracker();
+    }
+
+    // The consumer path. Applies the XP exactly like save() and, in this same transaction, records
+    // what it did to this log (how much, and the activity's level before and after) so that
+    // GET /activitylog/{id}/outcome can answer without anyone polling notifications. A rollback
+    // (e.g. the idempotency guard losing a race) takes the outcome row with it.
+    @Override
+    public LevelTrackerDto saveForLog(Long logId, Long userId, LevelTrackerRequestDTO dto) {
+        XpApplication applied = applyXp(userId, dto);
+        LevelTrackerDto tracker = applied.tracker();
+        logXpOutcomeRepository.save(LogXpOutcome.builder()
+                .logId(logId)
+                .userId(userId)
+                .activityId(dto.activityId())
+                .xpApplied(dto.xp())
+                .previousLevel(applied.previousLevel())
+                .newLevel(tracker.level())
+                .leveledUp(tracker.leveledUp())
+                .appliedAt(LocalDateTime.now())
+                .build());
+        return tracker;
+    }
+
+    // The tracker as returned to callers, plus the level it had BEFORE this award, which the
+    // returned DTO does not carry.
+    private record XpApplication(LevelTrackerDto tracker, int previousLevel) {
+    }
+
+    private XpApplication applyXp(Long userId, LevelTrackerRequestDTO dto) {
         boolean created = levelTrackerRepository.insertIfAbsent(userId, dto.activityId()) == 1;
 
         var tracker = levelTrackerRepository
@@ -137,7 +170,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
                     .build());
         }
 
-        return mapToDto(saved, leveledUp, progressFor(saved));
+        return new XpApplication(mapToDto(saved, leveledUp, progressFor(saved)), previousLevel);
     }
 
     // #74: audit write lives here, not inside save(), so every event-driven award (the

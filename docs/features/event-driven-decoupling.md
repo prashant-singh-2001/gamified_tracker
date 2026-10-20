@@ -128,7 +128,7 @@ public void onActivityLogged(ActivityLoggedEvent event) {
 
     processedEventRepository.saveAndFlush(new ProcessedEvent(key, LocalDateTime.now()));  // guard FIRST
 
-    levelTrackerService.save(event.userId(),
+    levelTrackerService.saveForLog(event.logId(), event.userId(),
             new LevelTrackerRequestDTO(event.activityId(), event.xpEarned()));
 }
 ```
@@ -137,7 +137,7 @@ saved **before** XP is applied — not after. If two deliveries of the same even
 second `saveAndFlush()` throws a constraint violation, which rolls back the *entire* transaction
 (including any XP that would have been applied), the message gets redelivered, and this time
 `existsById` is already `true`. XP is applied **exactly once** despite at-least-once delivery — and
-it calls the **same** `LevelTrackerServiceImpl.save(userId, dto)` that the HTTP `POST /level`
+it runs the **same** XP application as `LevelTrackerServiceImpl.save(userId, dto)`, which the HTTP `POST /level`
 endpoint eventually reaches too (see [Concurrency-Safe XP Accumulation](concurrency-safe-xp.md)), so
 there's no business-logic fork in the XP accumulation itself between the sync and async paths — only
 in what gates and audits the HTTP side on the way in, see below.

@@ -279,7 +279,7 @@ flowchart TD
 | 10 | **Outlier verdict** — absolute-threshold check first (independent of the statistical baseline, catches a self-consistent-but-implausible history), else one-sided modified z-score against the user's own baseline (falling back to category-wide under `min-samples`) | `ActivityLogServiceImpl.java:203-210`, `DurationOutlierEvaluationService.java:34-52`, `DurationOutlierDetector.java:24-56` | flagged → log still saved (see step 11), but no outbox row |
 | 11 | `activity_log` row saved **first** — its generated id is the idempotency key for everything downstream | `ActivityLogServiceImpl.java:134-137` | |
 | 12 | **Same transaction**: `outbox_event` row saved — **only if not flagged** | `ActivityLogServiceImpl.java:139-159` | flagged → metric `activity.log.flagged` tagged with `basis`, XP silently withheld pending flow 16 |
-| 13 | `200 OK` returned | `ActivityLogServiceImpl.java:163-164` | `leveledUp` is **always `false`** here — XP application is async (flow 10–13) |
+| 13 | `200 OK` returned | `ActivityLogServiceImpl.java:163-164` | `leveledUp` is **always `false`** here — XP application is async (flow 10–13). Poll [`GET /activitylog/{id}/outcome`](#12a-per-log-outcome--get-activitylogidoutcome) for the real answer |
 
 → Deep dives: [Fuzzy Activity-Name Matching](features/fuzzy-activity-matching.md),
 [Session Integrity](features/session-integrity.md), [Streaks](features/streaks.md),
@@ -335,7 +335,7 @@ sequenceDiagram
         alt PK conflict (race)
             AL-->>MQ: rollback, redeliver
         else inserted
-            AL->>LT: save(userId, activityId, xp)
+            AL->>LT: saveForLog(logId, userId, activityId, xp)
             LT->>DB: insertIfAbsent + SELECT ... FOR UPDATE
             LT->>DB: totalXp += xp  (point of no return)
             LT->>LT: resolveLevel (explicit thresholds, else default curve)
@@ -377,7 +377,7 @@ using the old class-name header, a deliberate rolling-deploy safety net
 |---|---|---|
 | 1 | `existsById(logId)` fast path | already processed → return, no-op (redelivery) |
 | 2 | `processedEventRepository.save(new ProcessedEvent(logId, now))` — the **unique PK is what actually serializes a race**, not the check in step 1 | insert conflict (a racing duplicate delivery) → this save throws → **whole transaction rolls back, XP not applied** → message redelivered → step 1 now finds it → skipped |
-| 3 | `levelTrackerService.save(userId, ...)` | — |
+| 3 | `levelTrackerService.saveForLog(logId, userId, ...)` — applies the XP (steps 11-12) and records the per-log outcome in the same transaction | — |
 
 ### 11. XP application & level resolution
 
@@ -397,6 +397,26 @@ using the old class-name header, a deliberate rolling-deploy safety net
 If `leveledUp`, a `LevelUpEvent` row is appended (`LevelTrackerServiceImpl.java:120-131`) — feeds
 `GET /notifications`, `/notifications/unread-count`, `POST /notifications/{id}/read`
 (`NotificationServiceImpl.java`). → [Level-Up Notifications](features/level-up-notifications.md).
+
+### 12a. Per-log outcome — `GET /activitylog/{id}/outcome`
+
+`POST /activitylog/` always answers `leveledUp=false` (XP isn't applied yet). So that a client doesn't
+have to infer a level-up from the notification feed, `saveForLog` (step 3 of flow 10) also appends a
+`log_xp_outcome` row **in the same transaction as the XP mutation** — `logId`, `userId`, `xpApplied`,
+and the activity's level before and after — and a rollback takes it with it.
+
+`GET /api/activitylog/{id}/outcome` reads it (`LogOutcomeController` → `LogOutcomeServiceImpl`,
+gamification-service). The gateway routes exactly `GET /api/activitylog/*/outcome` to gamification and
+the rest of `/api/activitylog/**` to activity-service (`RouteConfiguration.LOG_OUTCOME`, shared by both
+routes so they cannot overlap).
+
+| State | Response |
+|---|---|
+| XP applied, caller owns the log | `200 {"status":"APPLIED","xpApplied":144.0,"leveledUp":true,"newLevel":2,"previousLevel":1}` |
+| Not applied yet, held for review (`FLAGGED`/`REJECTED`), unknown id, or **someone else's log** | `200 {"status":"PENDING", ...null}` — deliberately indistinguishable, so the endpoint can't be used to probe other users' logs |
+
+Levels are the *activity's* level (`level_tracker.level`), the same one a `LevelUpEvent` reports —
+not the overall level. Logs processed before `V7` have no row and read `PENDING` forever.
 
 ### 13. Manual XP award (admin, bypasses flows 8–10 entirely)
 
