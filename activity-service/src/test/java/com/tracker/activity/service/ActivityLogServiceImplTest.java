@@ -7,6 +7,7 @@ import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.ActivityStreak;
 import com.tracker.activity.dao.Category;
 import com.tracker.activity.dao.ReviewStatus;
+import com.tracker.activity.domain.ActivityLogQuery;
 import com.tracker.activity.domain.ActivityMatcher;
 import com.tracker.activity.domain.DurationOutlierDetector;
 import com.tracker.activity.domain.MatchField;
@@ -37,6 +38,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.ResponseEntity;
 
 import java.time.LocalDate;
@@ -331,6 +334,38 @@ public class ActivityLogServiceImplTest {
         verifyNoInteractions(activityLogRepository);
     }
 
+
+    @Test
+    @DisplayName("getActivityForUserPaged maps the page and reports its envelope")
+    void testGetActivityForUserPaged() {
+        LocalDateTime now = LocalDateTime.now();
+        Activity a = Activity.builder().id(1L).name("A").category(Category.OTHER).xpMultiplier(1.0).active(true).createdAt(now).build();
+        ActivityLog l1 = ActivityLog.builder().id(1L).userId(2L).activity(a).startTime(now).endTime(now.plusMinutes(10)).durationMinutes(10L).xpEarned(10.0).notes("n").createdAt(now).build();
+        ActivityLog l2 = ActivityLog.builder().id(2L).userId(2L).activity(a).startTime(now.plusHours(1)).endTime(now.plusHours(1).plusMinutes(20)).durationMinutes(20L).xpEarned(20.0).notes("n").createdAt(now).build();
+        ActivityLogQuery query = ActivityLogQuery.parse("1", "2", "xpEarned,asc", null, null, null);
+        // 5 rows in total, this being the second page of two
+        when(activityLogRepository.findAll(org.mockito.ArgumentMatchers.<Specification<ActivityLog>>any(), eq(query.toPageable())))
+                .thenReturn(new PageImpl<>(List.of(l1, l2), query.toPageable(), 5));
+
+        var resp = activityLogService.getActivityForUserPaged(2L, 2L, query);
+
+        var body = resp.getBody();
+        assertEquals(2, body.content().size());
+        assertEquals(1, body.page());
+        assertEquals(2, body.size());
+        assertEquals(5L, body.totalElements());
+        assertEquals(3, body.totalPages());
+        assertEquals("xpEarned,asc", body.sort());
+        assertEquals(1L, body.content().get(0).id());
+    }
+
+    @Test
+    @DisplayName("getActivityForUserPaged rejects another user's logs and never touches the repository (#79/#88)")
+    void testGetActivityForUserPaged_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class,
+                () -> activityLogService.getActivityForUserPaged(1L, 2L, ActivityLogQuery.parse(null, null, null, null, null, null)));
+        verifyNoInteractions(activityLogRepository);
+    }
     @Test
     @DisplayName("getStreaksForUser returns mapped list")
     void testGetStreaksForUser() {
