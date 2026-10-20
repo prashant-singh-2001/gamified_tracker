@@ -5,6 +5,7 @@ import com.tracker.gamification.dao.ActivityLevelThresholdId;
 import com.tracker.gamification.dao.LevelTracker;
 import com.tracker.gamification.dao.LevelTrackerArchive;
 import com.tracker.gamification.dao.LevelUpEvent;
+import com.tracker.gamification.dao.LogXpOutcome;
 import com.tracker.gamification.dao.ManualXpAward;
 import com.tracker.gamification.domain.LevelCurve;
 import com.tracker.gamification.dto.LevelTrackerDto;
@@ -15,6 +16,7 @@ import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
 import com.tracker.gamification.repository.LevelUpEventRepository;
+import com.tracker.gamification.repository.LogXpOutcomeRepository;
 import com.tracker.gamification.repository.ManualXpAwardRepository;
 import com.tracker.gamification.service.impl.LevelTrackerServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -51,6 +53,9 @@ public class LevelTrackerServiceImplTest {
 
     @Mock
     private ManualXpAwardRepository manualXpAwardRepository;
+
+    @Mock
+    private LogXpOutcomeRepository logXpOutcomeRepository;
 
     // Real curve (not @Mock) — @InjectMocks needs an actual computation here, not a stub returning
     // 0/false for everything. Values match the plan's worked examples (base 100, exponent 1.5).
@@ -154,6 +159,97 @@ public class LevelTrackerServiceImplTest {
 
         // Assert — no level-up, so no event
         verify(levelUpEventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("saveForLog records the per-log outcome: xp applied and the level before and after")
+    void saveForLog_recordsOutcome_onLevelUp() {
+        // Same level-up setup as above: 300 XP crosses the level-2 threshold (200). The tracker had
+        // no level yet, which counts as level 1 -- so the outcome says 1 -> 2, leveledUp.
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 300.0);
+
+        ActivityLevelThreshold levelThreshold = ActivityLevelThreshold.builder()
+                .id(ActivityLevelThresholdId.builder().activityId(1L).level(2).build())
+                .xpRequired(200.0)
+                .build();
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+        LevelTracker leveledUpTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).level(2).totalXp(300.0).currentLevelXp(100.0).build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of(levelThreshold));
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(leveledUpTracker);
+
+        LevelTrackerDto result = levelTrackerService.saveForLog(42L, 1L, request);
+
+        assertTrue(result.leveledUp());
+        verify(logXpOutcomeRepository).save(argThat((LogXpOutcome o) ->
+                o.getLogId().equals(42L)
+                        && o.getUserId().equals(1L)
+                        && o.getActivityId().equals(1L)
+                        && o.getXpApplied() == 300.0
+                        && o.getPreviousLevel() == 1
+                        && o.getNewLevel() == 2
+                        && o.isLeveledUp()
+                        && o.getAppliedAt() != null));
+    }
+
+    @Test
+    @DisplayName("saveForLog records previous == new level when the award does not level the user up")
+    void saveForLog_recordsOutcome_whenNoLevelUp() {
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 50.0);
+
+        ActivityLevelThreshold level3 = ActivityLevelThreshold.builder()
+                .id(ActivityLevelThresholdId.builder().activityId(1L).level(3).build())
+                .xpRequired(250.0)
+                .build();
+        // Already level 3 with 300 XP; +50 stays level 3
+        LevelTracker existing = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).level(3).totalXp(300.0).currentLevelXp(50.0).logCount(4).build();
+        LevelTracker after = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).level(3).totalXp(350.0).currentLevelXp(100.0).logCount(5).build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(0);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(existing));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(350.0), any(Pageable.class)))
+                .thenReturn(List.of(level3));
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(after);
+
+        LevelTrackerDto result = levelTrackerService.saveForLog(7L, 1L, request);
+
+        assertFalse(result.leveledUp());
+        verify(logXpOutcomeRepository).save(argThat((LogXpOutcome o) ->
+                o.getLogId().equals(7L)
+                        && o.getXpApplied() == 50.0
+                        && o.getPreviousLevel() == 3
+                        && o.getNewLevel() == 3
+                        && !o.isLeveledUp()));
+    }
+
+    @Test
+    @DisplayName("save (the admin/manual path) does NOT record a log outcome -- there is no log")
+    void save_doesNotRecordALogOutcome() {
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 100.0);
+        LevelTracker fresh = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+        LevelTracker saved = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).level(1).totalXp(100.0).currentLevelXp(100.0).build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L)).thenReturn(Optional.of(fresh));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(100.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(activityLevelThresholdRepository.countForActivity(1L)).thenReturn(3L);
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(saved);
+
+        levelTrackerService.save(1L, request);
+
+        verifyNoInteractions(logXpOutcomeRepository);
     }
 
     @Test

@@ -44,10 +44,10 @@ class ActivityLoggedListenerTest {
 
         InOrder inOrder = inOrder(processedEventRepository, levelTrackerService);
         inOrder.verify(processedEventRepository).saveAndFlush(argThat(pe -> "42".equals(pe.getIdempotencyKey())));
-        inOrder.verify(levelTrackerService).save(eq(1L), any(LevelTrackerRequestDTO.class));
+        inOrder.verify(levelTrackerService).saveForLog(eq(42L), eq(1L), any(LevelTrackerRequestDTO.class));
 
         ArgumentCaptor<LevelTrackerRequestDTO> captor = ArgumentCaptor.forClass(LevelTrackerRequestDTO.class);
-        verify(levelTrackerService).save(eq(1L), captor.capture());
+        verify(levelTrackerService).saveForLog(eq(42L), eq(1L), captor.capture());
         assertEquals(2L, captor.getValue().activityId());
         assertEquals(30.0, captor.getValue().xp(), 1e-9);
     }
@@ -61,12 +61,12 @@ class ActivityLoggedListenerTest {
         listener.onActivityLogged(event);
 
         verify(processedEventRepository, never()).saveAndFlush(any());
-        verify(levelTrackerService, never()).save(anyLong(), any());
+        verify(levelTrackerService, never()).saveForLog(anyLong(), anyLong(), any());
     }
 
     @Test
     @DisplayName("issue #82: a racing duplicate that loses existsById still can't apply XP -- the "
-            + "guard insert throwing must stop the method before levelTrackerService.save runs")
+            + "guard insert throwing must stop the method before levelTrackerService.saveForLog runs")
     void onActivityLogged_guardInsertThrows_xpNeverApplied() {
         ActivityLoggedEvent event = new ActivityLoggedEvent(42L, 1L, 2L, 30.0);
         when(processedEventRepository.existsById("42")).thenReturn(false);
@@ -75,6 +75,6 @@ class ActivityLoggedListenerTest {
 
         assertThrows(DataIntegrityViolationException.class, () -> listener.onActivityLogged(event));
 
-        verify(levelTrackerService, never()).save(anyLong(), any());
+        verify(levelTrackerService, never()).saveForLog(anyLong(), anyLong(), any());
     }
 }
