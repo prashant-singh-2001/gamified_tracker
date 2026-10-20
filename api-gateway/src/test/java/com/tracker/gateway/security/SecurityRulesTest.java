@@ -342,4 +342,33 @@ class SecurityRulesTest {
             // authorized
         }
     }
+
+    @Test
+    @DisplayName("PUT and DELETE /api/threshold/{activityId}/{level} are ADMIN only")
+    void putAndDeleteThreshold_areAdminOnly() throws Exception {
+        String user = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/threshold/1/2")
+                        .header("Authorization", "Bearer " + user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"xpRequired\":300}"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/threshold/1/2")
+                        .header("Authorization", "Bearer " + user))
+                .andExpect(status().isForbidden());
+
+        String admin = jwtUtil.generateToken("admin@example.com", Role.ADMIN, 99L);
+        // Authorized for ADMIN; the request then fails to route (no gamification-service registered here).
+        for (var request : new org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder[]{
+                org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/threshold/1/2")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"xpRequired\":300}"),
+                org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/threshold/1/2")}) {
+            try {
+                MvcResult result = mockMvc.perform(request.header("Authorization", "Bearer " + admin)).andReturn();
+                assertNotEquals(403, result.getResponse().getStatus());
+            } catch (ServletException expectedDownstreamRoutingFailure) {
+                // authorization already let the request through by the time this was thrown
+            }
+        }
+    }
 }
