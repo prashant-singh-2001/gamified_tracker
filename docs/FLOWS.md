@@ -1,6 +1,6 @@
 # System Flows — Gamified Tracker
 
-`docs/features/` holds twenty standalone deep-dives — each one answers *what* a feature is and
+`docs/features/` holds twenty-three standalone deep-dives — each one answers *what* a feature is and
 *why* it's built the way it is. None of them answer *what happens, in order, when something actually
 occurs* — a registration, a logged activity, a level-up — across the services that participate in
 it. This document is that ordering map.
@@ -151,6 +151,23 @@ wrong — a deliberate no-user-enumeration design, detailed in
 → Deep dive: [Refresh Token Rotation](features/refresh-token.md) (reuse-detection rationale, token
 lifecycle diagram).
 
+### 5a. Password reset
+
+`POST /auth/forgot` then `POST /auth/reset` · `PasswordResetService.requestReset` / `resetPassword` (both public, both under the same `AuthRateLimitFilter` as every `/auth/**` call)
+
+| # | Step | Source | Can stop here? |
+|---|---|---|---|
+| 1 | `/forgot`: `ForgotPasswordRequest` trims + lower-cases the email (`Emails.normalize`) | `ForgotPasswordRequest` | missing/malformed email → `400` |
+| 2 | Account looked up by email | `PasswordResetService.requestReset` | **unknown email → return silently**; the controller still answers the same `202` body, so the endpoint cannot be used to find out who is registered |
+| 3 | The user's earlier unused tokens are retired (`invalidateUnusedForUser`) so only the newest works | `PasswordResetTokenRepository` | |
+| 4 | 32 random bytes → base64url token; **only its SHA-256 is stored** (`password_reset_token.token_hash`) with `expires_at` (default 30 min) | `PasswordResetService.newToken` / `hash` | |
+| 5 | Raw token handed to the `PasswordResetNotifier` port (default: log-only, no mail provider wired) | `LoggingPasswordResetNotifier` | a thrown delivery error is caught and logged, **not** surfaced — an error only on the known-account path would reveal it exists |
+| 6 | `/reset`: token hashed and looked up | `PasswordResetService.resetPassword` | unknown → `400 Invalid or expired reset token` |
+| 7 | **One conditional `UPDATE`** marks it used only if still unused and unexpired (`markUsedIfValid`) | `PasswordResetTokenRepository` | 0 rows (expired, or already used — including by a concurrent request) → the same `400`, one message for all three cases |
+| 8 | New password BCrypt-encoded and saved; the user's other unused tokens retired; **every refresh token revoked** | `resetPassword`, `RefreshTokenRevocationService.revokeAllForUser` | an already-issued access token stays valid until it expires |
+
+→ Deep dive: [Password reset](features/password-reset.md).
+
 ### 6. Admin provisioning
 
 `AdminBootstrap` (`AdminBootstrap.java`), an `ApplicationRunner` gated by
@@ -229,6 +246,21 @@ This is a **different** repository method than the one flow 8's exact-match step
 fuzzy-suggestion catalog read (below) use — those two stay deliberately unfiltered, since they need
 to keep seeing inactive rows (see [error-handling.md](features/error-handling.md) and
 [fuzzy-activity-matching.md](features/fuzzy-activity-matching.md)).
+
+### 7b. Admin edits or removes an activity
+
+`PATCH /api/activity/{id}` and `DELETE /api/activity/{id}` (**ADMIN-gated at the gateway** — as is any catalog `GET` carrying `?includeInactive`, matched on the parameter's *presence* because the downstream boolean binding also accepts `on`/`yes`/`1`) → `ActivityServiceImpl.updateActivity` / `deleteActivity`.
+
+| # | Step | Can stop here? |
+|---|---|---|
+| 1 | `PATCH`: an all-absent body is rejected | `400` "Nothing to update" |
+| 2 | Row read with `findById` — **unfiltered on purpose**, so an inactive activity can be edited and re-enabled | unknown id → `404` |
+| 3 | A changed `name` is trimmed and checked against every *other* activity (`ensureNameFree`) | taken → `409` (renaming to its own current name is fine) |
+| 4 | Only the supplied fields change; `xpMultiplier: 0` clears the override so the category base applies again | negative multiplier → `400` |
+| 5 | `saveAndFlush`; losing a race on the unique constraint is re-checked and mapped to the same `409` | |
+| 6 | `DELETE`: if any `activity_log` or `activity_streak` row references the activity it is only **deactivated** (soft delete, idempotent); otherwise the row is **removed** and the name is free again | unknown id → `404` |
+
+`POST /api/activity` shares step 3's check, so a duplicate name is now a `409` instead of a bare `500`. Renames and category changes do not alter XP already awarded, but analytics group by the activity's *current* name and category, so history re-buckets. → [Error Handling](features/error-handling.md).
 
 ---
 
@@ -466,8 +498,8 @@ stateDiagram-v2
 ### 15. Rank recompute
 
 `@Scheduled(fixedDelayString = "${ranking.recompute-interval-ms:300000}")` (5 min default) or
-on-demand `POST /ranks/recompute` (**no admin guard on this endpoint** — worth noting, not fixed
-here) → `RankRecomputeServiceImpl.recompute` (`RankRecomputeServiceImpl.java:28-72`), guarded by
+on-demand `POST /ranks/recompute` (**ADMIN-gated at the gateway**, issue 83: it is a
+maintenance operation, not a user action) → `RankRecomputeServiceImpl.recompute` (`RankRecomputeServiceImpl.java:28-72`), guarded by
 `@SchedulerLock` (issue #82 — same class of race as the outbox relay above; the lock also covers
 the on-demand path since both go through this same bean method): reads all `level_tracker` totals,
 dense-ranks ties (equal `totalXp` shares a position), computes `topFraction = (position-1)/totalUsers`,
@@ -484,13 +516,28 @@ Kept deliberately shallow — controller → service → repository → DTO, no 
 |---|---|---|
 | Level / progress | `GET /level/user/{userId}`, `/level/activity/{activityId}` | batched threshold lookup for list endpoints (`mapAll`, one query not N) vs single-row `progressFor` |
 | **Leaderboard** | `GET /leaderboard`, `/leaderboard/activity/{id}`, `/leaderboard/me` | **computed live**: `SUM(level_tracker.total_xp) GROUP BY user_id` on every request (`LeaderboardServiceImpl.java:21-23`) |
-| **Ranks** | `GET /ranks/me`, `/ranks/{tier}/leaderboard`, `/ranks` | **read from the materialized snapshot** written by flow 15 (`RankServiceImpl.java` — `userRankRepository` reads only) |
-| Notifications | `GET /notifications`, `/unread-count`, `POST /{id}/read`, `POST /read-all` | reads/marks `level_up_event` rows from flow 12 |
-| Streaks | `GET /activitylog/streaks/user/{id}` | reads `activity_streak`, mutated only by flow 9 step 8 |
-| Analytics | `GET /activitylog/analytics/user/{userId}/{category-summary,xp-over-time,weekly-report,best-time-of-day}` | in-memory stream aggregation over raw logs — → [Analytics](features/analytics.md) |
+| **Ranks** | `GET /ranks/me[?allowUnranked=true]`, `/ranks/{tier}/leaderboard`, `/ranks` | **read from the materialized snapshot** written by flow 15 (`RankServiceImpl.java` — `userRankRepository` reads only). `/ranks/me` also carries the rank nudge (`tierCutoffXp`, `nextTier`, `xpToNextTier`); an unranked caller still gets `404` unless `allowUnranked=true`, which answers `200 {"ranked": false}` |
+| Notifications | `GET /notifications`, `/unread-count` (`{"count": n}`), `POST /{id}/read`, `POST /read-all` (one `UPDATE ... WHERE is_read = false`, returns `{"updated": n}`) | reads/marks `level_up_event` rows from flow 12 |
+| Streaks | `GET /activitylog/streaks/user/{id}` | reads `activity_streak`, mutated only by flow 9 step 8. `active` is **computed on read**: last activity today or yesterday in UTC (the stored `currentStreak` is only reset by the next log, so it goes stale after a gap) |
+| Analytics | `GET /activitylog/analytics/user/{userId}/{category-summary,xp-over-time,weekly-report,best-time-of-day}` | in-memory stream aggregation over raw logs; `weekly-report` takes `?mode=rolling` (default) or `calendar` (Monday to Sunday) — → [Analytics](features/analytics.md) |
+| Activity logs | `GET /activitylog/user/{id}` (unpaged, as before), `?page&size&sort&activityId&from&to` (paged `{content,page,size,totalElements,totalPages,sort}`), `GET /activitylog/user/{id}/recent?limit=5` | the unpaged and paged forms are separate handlers; the legacy one is selected only when none of the paging or filter parameters is present, so existing callers are unaffected. `recent` returns the activities the caller logs most (times logged, then most recently used) |
+| Log outcome | `GET /activitylog/{logId}/outcome` | served by gamification (the gateway routes this one path there): `PENDING` until the consumer applies the log, then `APPLIED` with `xpApplied`, `leveledUp`, `newLevel`, `previousLevel` from a per-log row written in the consumer transaction |
+| Standings display names | `GET /api/leaderboard`, `/api/leaderboard/activity/{id}`, `/api/ranks/{tier}/leaderboard`, `GET /api/users/me` | the **gateway** enriches rows with `displayName` (first name plus last initial) from its own `User` table, since gamification holds no names; `/users/me` returns the caller profile |
 
 The leaderboard/ranks contrast above is deliberate and worth internalizing: **nothing reads
 `activity_log` for ranking** — only `level_tracker` totals, either summed live or pre-aggregated.
+
+### 16a. Editing level thresholds
+
+`PUT` / `DELETE /api/threshold/{activityId}/{level}` (**ADMIN-gated at the gateway**; a threshold has no surrogate id, so the pair is the key) → `ActivityLevelThresholdServiceImpl`. `POST /api/threshold`, which already overwrote a row with the same key, goes through the same guard.
+
+| # | Step | Can stop here? |
+|---|---|---|
+| 1 | `PUT`: the row must exist (it never creates; `POST` does) | `404` |
+| 2 | `requireMonotonic`: cumulative XP must rise strictly with level, compared with the nearest lower and higher rows | breaks the curve → `409` with the offending levels in `detail` |
+| 3 | Row saved (`PUT`) or removed (`DELETE`; a gap in level numbers is still a valid curve) | `DELETE` of a missing row → `404` |
+
+**Existing progress is not recomputed.** `level_tracker.level` is stored and is re-resolved from `total_xp` by `applyLevel` the next time that user earns XP for the activity, so an edit shows up lazily and no past level-up event is rewritten. Removing an activity's *last* row hands it back to the default curve (`resolveLevel` falls back only when an activity has no rows at all).
 
 ### 17. AI weekly digest
 
@@ -531,6 +578,13 @@ step 4's very first matcher: `.dispatcherTypeMatchers(DispatcherType.ERROR, Disp
 re-authenticating filters are skipped on that internal dispatch), match no `permitAll` rule, and
 have Spring Security overwrite the real response with its own `401`/`403` — masking every proxied
 error, a `404` and a `500` alike. → [Error Handling](features/error-handling.md).
+
+**The same bodies are in the generated OpenAPI.** springdoc cannot see a `ProblemDetail` from the controllers, so
+each service registers a `ProblemOpenApiCustomizer` that adds a shared `Problem` schema, named examples (with the
+real handler messages) and 4xx responses attached to operations — by shape (a body or parameter can fail with
+`400`, a path variable with `404`) and by a small table for the outcomes a client must tell apart. The gateway's
+`/auth/**` `429` is documented separately (`RateLimited`) because its body is `{"error": ...}` written by
+`AuthRateLimitFilter`, not a `ProblemDetail`. `OpenApiErrorExamplesTest` in each service pins the result.
 
 ### 19. Trace & metrics flow
 
@@ -584,11 +638,17 @@ be in a plain `up -d`'s `depends_on`) and flow 17 (`insights.enabled` and every 
 selector must default to fully off) — any feature that needs a key or heavy optional infra must
 default disabled or the health-check gate in this flow goes red.
 
+**`mvn clean verify` includes a real-Postgres slice.** `PostgresNativeQueriesTest` (Testcontainers, `postgres:15`)
+runs the gamification migrations and the native SQL that H2 cannot execute. The `ubuntu-latest` runner has Docker,
+so it runs here; on a machine without Docker it is skipped rather than failed. It exists because three defects
+(native SQL ignoring `default_schema`, a NULL `log_count`, a `GROUP BY` only Postgres rejects) once stopped every
+XP award in production while all H2 tests stayed green. → [Testing Strategy](features/testing-strategy.md).
+
 ---
 
 ## Related
 
-- [docs/features/](features/) — the 20 deep-dives this document links out to throughout
+- [docs/features/](features/) — the 23 deep-dives this document links out to throughout
 - [API.md](../API.md) — full request/response shapes for every endpoint named above
 - [CLAUDE.md](../.claude/CLAUDE.md) — architectural knowledge base; treat this document's flow
   ordering as the more current source for step-by-step sequencing specifically, since inline flow

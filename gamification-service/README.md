@@ -84,13 +84,13 @@ All level-tracker rows for an activity (one per user). → `200 OK`, array.
 
 ### Activity Level Threshold — `/threshold`
 
-Defines the XP required to reach each level, per activity. **Thresholds must be seeded** (there is no default curve yet — see Troubleshooting).
+Defines the cumulative XP required to reach each level, per activity. An activity with **no** explicit rows falls back to the formula-driven default curve (`leveling.default-curve.*`, with an `enabled` kill switch); an activity with even one row uses only its own rows.
 
 #### `GET /threshold`
 List all thresholds. → `200 OK`, array of `ActivityLevelThresholdDto`.
 
 #### `POST /threshold`
-Create (or overwrite) a threshold.
+Create (or overwrite) a threshold. Cumulative XP must rise strictly with level: a row that needs no more XP than the nearest lower level, or no less than the nearest higher one, is a `409` whose `detail` names the levels.
 
 Request / Response — `ActivityLevelThresholdDto`:
 | Field | Type |
@@ -103,6 +103,16 @@ Request / Response — `ActivityLevelThresholdDto`:
 Look up a single threshold by composite key — despite the `POST`, this is a **read** (the body is used only as a key; `xpRequired` is ignored).
 - `200 OK` → the matching `ActivityLevelThresholdDto`
 - `404 Not Found` → `ProblemDetail` (`"ActivityLevelThreshold not found"`)
+
+#### `PUT /threshold/{activityId}/{level}` and `DELETE /threshold/{activityId}/{level}`
+A threshold has no surrogate id; the pair is the key. Both are ADMIN-gated at the gateway.
+- `PUT` body `{"xpRequired": 300}` → `200` with the updated `ActivityLevelThresholdDto`. It never creates: `404` if the row is absent. `409` if it breaks the curve (same rule as `POST`).
+- `DELETE` → `204`, or `404` if absent. A gap in level numbers is still valid; removing an activity's last row returns it to the default curve.
+- Existing trackers are **not** recomputed: `level_tracker.level` is re-resolved from total XP on that user's next XP award for the activity.
+
+### Other endpoints
+
+`GET /activitylog/{logId}/outcome` (whether the XP for a log has been applied: `PENDING` or `APPLIED` with `xpApplied`, `leveledUp`, `newLevel`, `previousLevel`, read from a per-log row written in the consumer transaction), the `/leaderboard`, `/ranks` (including `GET /ranks/me` with its rank nudge fields, and `allowUnranked`) and `/notifications` (`/unread-count` returns `{"count": n}`; `POST /read-all` returns `{"updated": n}`) endpoints are documented in [API.md](../API.md).
 
 ## Data model
 
@@ -136,6 +146,8 @@ Unique constraint **`uk_level_tracker_user_activity`** on `(user_id, activity_id
 
 The unique PK is what makes redelivery safe: a racing/duplicate delivery hits a constraint violation on `save`, the enclosing `@Transactional` method rolls back (XP not double-applied), and the message gets redelivered — by which point `existsById` is `true` and it's skipped.
 
+**`log_xp_outcome`** — one row per activity log whose XP has been applied (`V7__create_log_xp_outcome.sql`), written by the consumer in the same transaction as the XP mutation. `log_id` (PK, the idempotency key), `user_id`, `activity_id`, `xp_applied`, `previous_level` / `new_level` (the **activity's** level before and after, as in a `level_up_event`), `leveled_up`, `applied_at`. Read by `GET /activitylog/{logId}/outcome`: a log with no row reads `PENDING`, and logs processed before the migration stay `PENDING` forever. It is the first per-log XP record in this service; `level_tracker` is still a running total.
+
 **`manual_xp_award`** — append-only audit trail for admin-triggered `POST /level` calls (issue #74; `V3__create_manual_xp_award.sql`):
 | Column | Type | Notes |
 |--------|------|-------|
@@ -167,7 +179,7 @@ The idempotent RabbitMQ consumer (new in #16 — full design: [`EVENT_DRIVEN_DEC
 1. `@RabbitListener(queues = "${messaging.queue}")` receives a `com.tracker.contracts.event.ActivityLoggedEvent(logId, userId, activityId, xpEarned)` — defined once in the shared `contracts` module, not duplicated per service (see [issue #23](https://github.com/prashant-singh-2001/gamified_tracker/issues/23)).
 2. **Dedup check:** `processedEventRepository.existsById(logId)` — if already processed, log and return (no-op).
 3. **Dedup guard, written first:** `processedEventRepository.save(new ProcessedEvent(logId, now()))`. If a concurrent duplicate already inserted this key, this throws, the `@Transactional` method rolls back, and the message is redelivered — landing on step 2 as a no-op next time.
-4. Calls the **same** `LevelTrackerServiceImpl.save(userId, dto)` primitive `awardManually` delegates to for the HTTP `POST /level` endpoint — no business-logic duplication. This path skips `awardManually` entirely, so it never writes a `manual_xp_award` row — only admin-triggered calls do.
+4. Calls `LevelTrackerServiceImpl.saveForLog(logId, userId, dto)`, which runs the **same** XP primitive `awardManually` uses for the HTTP `POST /level` endpoint (no business-logic duplication) and then writes one `log_xp_outcome` row, in the same transaction, recording the XP applied and the level before and after. That row backs `GET /activitylog/{logId}/outcome`. This path skips `awardManually` entirely, so it never writes a `manual_xp_award` row — only admin-triggered calls do.
 5. All in one `@Transactional` method, so the dedup write and the XP application succeed or fail together.
 
 ## Configuration
@@ -216,12 +228,12 @@ Covered by `@WebMvcTest` controller tests, `@DataJpaTest` repository tests (incl
 
 ## Troubleshooting
 
-- **Everyone stays at level 1** — no thresholds are seeded by default. `POST /threshold` a curve (e.g. level 2 at `xpRequired: 100`) for the activity first. (A default curve is proposed in [issue #8](https://github.com/prashant-singh-2001/gamified_tracker/issues/8).)
+- **Everyone stays at level 1** — the activity has explicit threshold rows but none reached yet, or `leveling.default-curve.enabled=false` and the activity has no rows at all. With the curve enabled and no rows, levels come from the formula; otherwise `POST /threshold` a curve (e.g. level 2 at `xpRequired: 100`). Existing trackers are re-resolved only on their next XP award.
 - **`POST /level` returns 403** — the token's role is `USER`, not `ADMIN` (issue #74); this endpoint is admin-only, hit `:8081`'s `POST /activitylog/` instead to earn XP the normal way.
 - **`POST /level` returns 400 with a field message** — `xp` was negative, or over the 10,000 per-call cap; the `MethodArgumentNotValidException` handler returns the exact validation message rather than an opaque `400`. **A different 400 (missing header)** means the `userId` request header wasn't sent — required on every direct `POST /level` call (the RabbitMQ consumer path doesn't use this header at all).
 - **XP from a logged activity never shows up** — check the RabbitMQ management UI (`http://localhost:15672`, guest/guest) for the `gamification.activity-logged.q` queue depth and its DLQ (`gamification.activity-logged.dlq`); a poison message lands there after 3 failed attempts.
 - **Health check:** `curl http://localhost:8082/actuator/health` — `spring-boot-starter-actuator` is wired (exposes `health`, `info`; Docker healthcheck depends on this).
-- **Schema/constraint errors on startup after a model change** — `ddl-auto: update` won't retrofit new constraints onto existing data; recreate the dev volume with `docker compose down -v`.
+- **Schema errors on startup after a model change** — `ddl-auto` is `validate`, so Hibernate never alters the schema: add a Flyway migration under `src/main/resources/db/migration` (the entity and the migration must agree). For a dev database that has drifted, recreate the volume with `docker compose down -v`.
 
 ## Related docs
 

@@ -42,7 +42,7 @@ This is a **real Spring Cloud Gateway** (`spring-cloud-starter-gateway-server-we
 - **`JwtUtil.generateToken(email, role, userId)`** — signs an HS256 token carrying `role` and the numeric `userId` (the user's `User.id`) as claims, plus a configurable expiry (`jwt.expiration`). `validateToken` parses and returns the claims. `AuthService` calls this with `user.getId()` on both register and login.
 - **`SecurityConfig`** — configures Spring Security as an OAuth2 Resource Server. `JwtDecoder` validates the Bearer token, and `jwtAuthenticationConverter()` maps the JWT `role` claim to Spring Security authorities (`ROLE_USER` / `ROLE_ADMIN`).
 - **`UserIdHeaderFilter`** — runs after authentication, requires the `userId` claim to be present (rejects with `401` if it's missing), and wraps the request to inject a trusted `userId` header. It then **wraps the request** to force a `userId` HTTP header to the JWT's trusted value — overriding `getHeader`, `getHeaders`, *and* `getHeaderNames` (not just `getHeader`, which the Gateway's own request-forwarding doesn't consult) so a client-forged `userId` header is fully replaced, not merely shadowed, before the request is routed downstream. `UserIdHeaderFilter.shouldNotFilter()` exempts `/auth/**`, swagger, `/v3/api-docs`, `/swagger-resources`, `/webjars`, and `/actuator/**`.
-- **`SecurityConfig`** — `@EnableWebSecurity`. `/auth/**`, swagger/OpenAPI paths, and `/actuator/**` are `permitAll`; three routes are gated with `.hasRole("ADMIN")` — `POST /api/activity` (and its trailing-slash form), `/api/activitylog/review/**`, and `POST /api/level` (and its trailing-slash form, added in issue #74); everything else requires authentication. There is no `@PreAuthorize`/`@EnableMethodSecurity` in this service — admin gating happens at the URL/route level because routing itself is now declarative, so there's no controller method left to annotate.
+- **`SecurityConfig`** — `@EnableWebSecurity`. `/auth/**`, swagger/OpenAPI paths, and `/actuator/**` are `permitAll`; these are gated with `.hasRole("ADMIN")`: `POST`, `PATCH` and `DELETE` on `/api/activity`, any catalog `GET` carrying the `includeInactive` parameter (matched on its presence, since the downstream boolean binding also accepts `on`/`yes`/`1`), `/api/activitylog/review/**`, `POST /api/level`, `GET /api/level` and `GET /api/level/activity/**` (reads with no single subject to compare against the caller), `POST`, `PUT` and `DELETE` on `/api/threshold`, and `POST /api/ranks/recompute`; everything else requires authentication. Per-user reads are not gated here at all: they are owner-checked inside the downstream services (issue #88). There is no `@PreAuthorize`/`@EnableMethodSecurity` in this service — admin gating happens at the URL/route level because routing itself is now declarative, so there's no controller method left to annotate.
 - **Why the header matters**: `activity-service` and `gamification-service` have no security of their own — they trust whatever arrives in the `userId` header on `POST /activitylog/` and `POST /level`. This filter is what makes that trust well-founded when the request comes through the Gateway. See [API.md § Authentication](../API.md#authentication) for the full write-vs-read trust model, including which reads are intentionally open across users.
 
 **Admin provisioning (issue #74).** `POST /auth/register` used to honor a client-supplied `role`, so anyone could self-register as `ADMIN` unauthenticated — that made every `hasRole("ADMIN")` matcher above decorative. `register` now always assigns `Role.USER`; the only way to get an `ADMIN` account is `AdminBootstrap`, an `ApplicationRunner` gated by `app.admin.bootstrap.enabled` (off by default, so CI's `cp .env.example .env` needs no secrets). Enable it with `ADMIN_BOOTSTRAP_ENABLED=true` plus `ADMIN_EMAIL`/`ADMIN_PASSWORD` in `.env` — it creates the account as `ADMIN` if absent, or promotes it if it already exists as `USER`.
@@ -79,23 +79,43 @@ Request: `{ "refreshToken" }`.
 - `200 OK` → a **new** `{ "accessToken", "refreshToken" }` pair; the old refresh token is consumed and cannot be reused
 - `401 Unauthorized` → not found, revoked, expired, or already used — reuse of an already-used token also revokes every other refresh token for that user (assumed compromise)
 
+#### `POST /auth/forgot` and `POST /auth/reset`
+Password reset. Both are public and share the `/auth/**` rate limit.
+- `forgot` takes `{ "email" }` and **always** answers `202` with the same body, whether or not the address has an account (no user enumeration). It issues a single-use token (30 minutes by default) stored only as a SHA-256 hash.
+- `reset` takes `{ "token", "newPassword" }` and answers `204`; an unknown, expired or already-used token is `400 Invalid or expired reset token`. On success every refresh token of the account is revoked.
+- Delivery goes through the `PasswordResetNotifier` port. **No mail provider is wired**: the default only logs, and `PASSWORD_RESET_LOG_TOKEN=true` (development only) logs the raw token. See [Password reset](../docs/features/password-reset.md).
+
+### Account — `/users`
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/users/me` | authenticated | the caller's profile (served by the gateway itself, not proxied); `404` if the account no longer exists |
+
+The gateway also adds a `displayName` (first name plus last initial) to leaderboard and tier-leaderboard rows on their way through, since gamification holds no names.
+
 ### Activity (routed) — `/api/activity`
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/activity` | authenticated | list all activities |
-| `GET` | `/api/activity/{name}` | authenticated | one activity by name (`404` if missing) |
-| `POST` | `/api/activity` | **ADMIN** | create an activity (`403` for non-admins) |
+| `GET` | `/api/activity` | authenticated | list active activities (each carries its `id`); `?includeInactive=true` is **ADMIN** and includes deactivated ones |
+| `GET` | `/api/activity/{idOrName}` | authenticated | one activity by id (digits only, falling back to the name) or by name (`404` if missing or inactive) |
+| `POST` | `/api/activity` | **ADMIN** | create an activity (`403` for non-admins, `409` if the name exists) |
+| `PATCH` | `/api/activity/{id}` | **ADMIN** | partial update of name, category, xpMultiplier, description and the `active` toggle (`409` on a taken name) |
+| `DELETE` | `/api/activity/{id}` | **ADMIN** | soft delete while logs or streaks reference it (`DEACTIVATED`), hard delete otherwise (`REMOVED`) |
 
-Request/response bodies mirror the Activity Service (`name`, `category`, `xpMultiplier`, `active`, `description`, `createdAt`) — see [API.md](../API.md) and the [activity-service README](../activity-service/README.md).
+Request/response bodies mirror the Activity Service (`id`, `name`, `category`, `xpMultiplier`, `active`, `description`, `createdAt`) — see [API.md](../API.md) and the [activity-service README](../activity-service/README.md).
 
 ### Activity Log (routed) — `/api/activitylog`
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/activitylog/{id}` | authenticated | one log by id — open read, any user's log |
+| `GET` | `/api/activitylog/{id}` | authenticated | one log by id — **owner-only**: someone else's log is a `404`, indistinguishable from a missing one (#88) |
+| `GET` | `/api/activitylog/{id}/outcome` | authenticated | whether the XP for this log has been applied yet (`PENDING` / `APPLIED` with `xpApplied`, `leveledUp`, `newLevel`, `previousLevel`); routed to gamification-service |
 | `POST` | `/api/activitylog` | authenticated | record a session (computes XP + bonus roll, notifies gamification). Always writes as the caller — `userId` comes from the trusted header, not the body |
-| `GET` | `/api/activitylog/user/{id}` | authenticated | all logs for a user — open read, `{id}` can be anyone |
+| `POST` | `/api/activitylog/natural` | authenticated | preview a log from one free-text sentence; writes nothing. Always `200`; `status: DISABLED` is the documented default |
+| `GET` | `/api/activitylog/user/{id}` | authenticated | the caller's logs — **owner-only** (`403` for another user's id). Unpaged as before, or paged/sorted/filtered with `?page&size&sort&activityId&from&to` |
+| `GET` | `/api/activitylog/user/{id}/recent?limit=5` | authenticated | the caller's most-logged activities (quick picks) |
+| `GET` | `/api/activitylog/streaks/user/{id}` | authenticated | streaks per activity, each with a computed `active` flag (last activity today or yesterday, UTC) |
 
 `POST` response includes `bonusApplied`, `bonusMultiplier`, and `leveledUp` — populated for real only on this response; `GET` endpoints always return them as `false`/`1.0`/`false`. Full field list in [API.md](../API.md).
 
@@ -103,11 +123,11 @@ Request/response bodies mirror the Activity Service (`name`, `category`, `xpMult
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/level` | authenticated | list every row — open read |
-| `GET` | `/api/level/{id}` | authenticated | one row by internal id (`404` if missing) — open read |
+| `GET` | `/api/level` | **ADMIN** | list every row (every user's) |
+| `GET` | `/api/level/{id}` | authenticated | one row by internal id — **owner-only**; another user's row is a `404` |
 | `POST` | `/api/level` | **ADMIN** | manually award XP to an activity (issue #74) — not the normal way players earn XP, see below |
-| `GET` | `/api/level/user/{userId}` | authenticated | all rows for a user — open read, `{userId}` can be anyone |
-| `GET` | `/api/level/activity/{activityId}` | authenticated | all rows for an activity |
+| `GET` | `/api/level/user/{userId}` | authenticated | all rows for a user — **owner-only** (`403` for another user's id) |
+| `GET` | `/api/level/activity/{activityId}` | **ADMIN** | every user's rows for an activity |
 
 **`POST` is admin-only, capped, and audited (issue #74).** It used to be a public, unbounded write reachable by any authenticated user. Now: `hasRole("ADMIN")` at the Gateway, `xp` capped at `10000.0` (`400` with a message over that), and every call writes a `manual_xp_award` row (acting admin, target, activity, xp, timestamp) before applying the XP. Body is `{ "targetUserId"?: Long, "activityId": Long, "xp": double }` — `targetUserId` is optional and defaults to the acting admin; there is no `userId` field (the acting admin's id comes from the trusted header, same as everywhere else). Players earn XP through `POST /api/activitylog` instead — see [gamification-service README](../gamification-service/README.md) and [Concurrency-Safe XP Accumulation](../docs/features/concurrency-safe-xp.md).
 
@@ -117,7 +137,11 @@ Request/response bodies mirror the Activity Service (`name`, `category`, `xpMult
 |--------|------|------|-------------|
 | `GET` | `/api/threshold` | authenticated | list all thresholds |
 | `POST` | `/api/threshold/activity` | authenticated | look up one threshold by composite key (a read, despite `POST`) |
-| `POST` | `/api/threshold` | authenticated | create/overwrite a threshold — not admin-gated |
+| `POST` | `/api/threshold` | **ADMIN** | create/overwrite a threshold (`409` if it breaks the level curve) |
+| `PUT` | `/api/threshold/{activityId}/{level}` | **ADMIN** | change the XP of an existing row (`404` if absent, `409` if cumulative XP stops rising with level) |
+| `DELETE` | `/api/threshold/{activityId}/{level}` | **ADMIN** | remove one row (`204`, or `404`) |
+
+Also routed to gamification-service and documented in [API.md](../API.md): `/api/leaderboard`, `/api/ranks` (including `GET /api/ranks/me`, with its rank nudge fields) and `/api/notifications` (`GET`, `/unread-count` returning `{"count": n}`, `POST /{id}/read`, `POST /read-all`).
 
 ### Misc
 
@@ -132,9 +156,11 @@ Request/response bodies mirror the Activity Service (`name`, `category`, `xpMult
 |--------|------|-------|
 | `id` | bigint | PK — this is the numeric `userId` embedded in every JWT |
 | `first_name` / `last_name` | String | |
-| `email` | String | unique |
+| `email` | String | unique, stored **trimmed and lower-cased** (`Emails.normalize`); a case-insensitive unique index (`V3`) backs it at the database |
 | `password` | String | BCrypt hash |
 | `role` | enum (STRING) | `USER` \| `ADMIN` |
+
+**`password_reset_token`** (`V4`): `token_hash` (SHA-256 of the emailed token, unique), `user_id` (FK, cascading delete), `expires_at`, `used_at`, `created_at`. The raw token is never stored. Alongside it, `refresh_token` (`V2`) holds the rotating refresh tokens.
 
 ## Configuration
 

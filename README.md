@@ -107,10 +107,10 @@ Every service sends traces to Zipkin automatically. To follow a request across G
 ## Try it
 
 ```bash
-# Register (returns a JWT, carrying role + userId claims)
+# Register (returns a JWT carrying role + userId claims; the role is always USER, never client-supplied)
 curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret","role":"USER"}'
+  -d '{"firstName":"Ada","lastName":"L","email":"ada@example.com","password":"secret"}'
 
 # List activities (use the token from register)
 curl http://localhost:8080/api/activity -H "Authorization: Bearer <token>"
@@ -122,7 +122,11 @@ curl http://localhost:8080/actuator/health
 curl http://localhost:8081/actuator/prometheus
 ```
 
-See **[API.md](API.md)** for the full endpoint reference — the Gateway also routes Level Tracker (`/api/level`) and Activity Level Threshold (`/api/threshold`) endpoints, not just Activity/Activity Log.
+See **[API.md](API.md)** for the full endpoint reference — the Gateway also routes Level Tracker (`/api/level`), Activity Level Threshold (`/api/threshold`), leaderboard, ranks and notifications endpoints, not just Activity/Activity Log.
+
+Each service also publishes a generated OpenAPI spec, including its error bodies and examples: `/v3/api-docs` (Swagger UI at `/swagger-ui.html`) on the gateway `:8080` (the `/auth/**` endpoints and `/users/me`), activity-service `:8081` and gamification-service `:8082`.
+
+Forgot your password? `POST /auth/forgot` then `POST /auth/reset`. No mail provider is wired yet, so for local development set `PASSWORD_RESET_LOG_TOKEN=true` and read the token from the gateway log — see [Password reset](docs/features/password-reset.md).
 
 ## Documentation
 

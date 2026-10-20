@@ -1,6 +1,6 @@
 # Feature Docs — Gamified Tracker
 
-Twenty-two standalone deep-dives into the notable engineering work in this codebase — each one covers
+Twenty-three standalone deep-dives into the notable engineering work in this codebase — each one covers
 what the feature is, why it's worth a second look, how it actually works (with a diagram and the
 load-bearing code), its config, and a way to try it live. Verified against the current source at
 time of writing; if a snippet looks stale, trust the code and treat the doc as a map, not the
