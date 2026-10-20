@@ -396,7 +396,7 @@ using the old class-name header, a deliberate rolling-deploy safety net
 ### 12. Level-up → notification
 
 If `leveledUp`, a `LevelUpEvent` row is appended (`LevelTrackerServiceImpl.java:120-131`) — feeds
-`GET /notifications`, `/notifications/unread-count`, `POST /notifications/{id}/read`
+`GET /notifications`, `/notifications/unread-count`, `POST /notifications/{id}/read`, `POST /notifications/read-all`
 (`NotificationServiceImpl.java`). → [Level-Up Notifications](features/level-up-notifications.md).
 
 ### 12a. Per-log outcome — `GET /activitylog/{id}/outcome`
@@ -485,7 +485,7 @@ Kept deliberately shallow — controller → service → repository → DTO, no 
 | Level / progress | `GET /level/user/{userId}`, `/level/activity/{activityId}` | batched threshold lookup for list endpoints (`mapAll`, one query not N) vs single-row `progressFor` |
 | **Leaderboard** | `GET /leaderboard`, `/leaderboard/activity/{id}`, `/leaderboard/me` | **computed live**: `SUM(level_tracker.total_xp) GROUP BY user_id` on every request (`LeaderboardServiceImpl.java:21-23`) |
 | **Ranks** | `GET /ranks/me`, `/ranks/{tier}/leaderboard`, `/ranks` | **read from the materialized snapshot** written by flow 15 (`RankServiceImpl.java` — `userRankRepository` reads only) |
-| Notifications | `GET /notifications`, `/unread-count`, `POST /{id}/read` | reads/marks `level_up_event` rows from flow 12 |
+| Notifications | `GET /notifications`, `/unread-count`, `POST /{id}/read`, `POST /read-all` | reads/marks `level_up_event` rows from flow 12 |
 | Streaks | `GET /activitylog/streaks/user/{id}` | reads `activity_streak`, mutated only by flow 9 step 8 |
 | Analytics | `GET /activitylog/analytics/user/{userId}/{category-summary,xp-over-time,weekly-report,best-time-of-day}` | in-memory stream aggregation over raw logs — → [Analytics](features/analytics.md) |
 

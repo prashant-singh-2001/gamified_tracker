@@ -134,7 +134,18 @@ public ResponseEntity<Map<String, Long>> findAllByUserId(@RequestHeader Long use
 
 @PostMapping("/{id}/read")
 public ResponseEntity<Void> markRead(@RequestHeader("userId") Long userId, @PathVariable Long id) { ... }
+
+@PostMapping("/read-all")
+public ResponseEntity<Map<String, Integer>> markAllRead(@RequestHeader("userId") Long userId) { ... }
 ```
+
+`unread-count` answers `{"count": n}`. The original capital-C `Count` key (a naming
+slip every other field avoids) has been **removed**; clients must read `count`.
+
+`read-all` is one `UPDATE … SET is_read = true WHERE user_id = ? AND is_read = false`
+(`markAllReadForUser`), not a load-and-save loop. The `user_id` predicate is what confines it to the
+caller's own rows; the count it returns is the rows actually flipped, so calling it twice is harmless
+(`{"updated": 0}` the second time). Its `user_id` predicate can use the `(user_id, created_at)` index from #85.
 
 ## Config
 

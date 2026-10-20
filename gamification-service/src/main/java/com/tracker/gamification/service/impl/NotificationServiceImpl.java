@@ -39,6 +39,12 @@ public class NotificationServiceImpl implements NotificationService {
         levelUpEventRepository.save(event);
     }
 
+    @Override
+    @Transactional
+    public int markAllRead(Long userId) {
+        return levelUpEventRepository.markAllReadForUser(userId);
+    }
+
     private LevelUpEventDto toDto(LevelUpEvent e) {
         return new LevelUpEventDto(e.getId(), e.getActivityId(), e.getOldLevel(),
                 e.getNewLevel(), e.getTotalXp(), e.getCurrentLevelXp(), e.isRead(), e.getCreatedAt());

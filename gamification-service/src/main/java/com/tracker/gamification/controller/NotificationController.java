@@ -23,7 +23,15 @@ public class NotificationController {
 
     @GetMapping("/unread-count")
     public ResponseEntity<Map<String, Long>> findAllByUserId(@RequestHeader Long userId) {
-        return ResponseEntity.ok(Map.of("Count", notificationService.unreadCount(userId)));
+        long unread = notificationService.unreadCount(userId);
+        return ResponseEntity.ok(Map.of("count", unread));
+    }
+
+    // Marks every unread notification of the caller read. Idempotent: calling it again flips nothing
+    // and answers {"updated": 0}. Only ever touches the caller's own rows (userId from the trusted header).
+    @PostMapping("/read-all")
+    public ResponseEntity<Map<String, Integer>> markAllRead(@RequestHeader("userId") Long userId) {
+        return ResponseEntity.ok(Map.of("updated", notificationService.markAllRead(userId)));
     }
 
     @PostMapping("/{id}/read")
