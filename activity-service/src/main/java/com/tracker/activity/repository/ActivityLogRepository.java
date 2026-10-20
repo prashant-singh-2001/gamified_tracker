@@ -3,6 +3,7 @@ package com.tracker.activity.repository;
 import com.tracker.activity.dao.Category;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.ReviewStatus;
+import com.tracker.activity.dto.RecentActivityProjection;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
@@ -84,4 +85,21 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLog, Long>,
                                   @Param("countedStatuses") Collection<ReviewStatus> countedStatuses);
     List<ActivityLog> findByUserIdAndStartTimeBetween(Long userId, LocalDateTime start, LocalDateTime end);
     List<ActivityLog> findByUserIdAndStartTimeAfter(Long userId, LocalDateTime after);
+
+    // Quick picks (GET /activitylog/user/{id}/recent): the caller's most-logged ACTIVE activities.
+    // Inactive ones are left out because logging against them is a 409 -- offering one as a shortcut
+    // would just hand the user an error. Most logged first, then most recently used, then id so the
+    // order is total (a tie must not reshuffle between calls). Pageable is only the result limiter,
+    // as everywhere else in this repo. All review statuses count: a flagged session is still
+    // something the user chose to log.
+    @Query("""
+            SELECT l.activity.id AS activityId, l.activity.name AS activityName,
+                   l.activity.category AS category, COUNT(l) AS timesLogged,
+                   MAX(l.startTime) AS lastUsedAt
+            FROM ActivityLog l
+            WHERE l.userId = :userId AND l.activity.active = true
+            GROUP BY l.activity.id, l.activity.name, l.activity.category
+            ORDER BY COUNT(l) DESC, MAX(l.startTime) DESC, l.activity.id ASC
+            """)
+    List<RecentActivityProjection> findMostLoggedActivities(@Param("userId") Long userId, Pageable pageable);
 }

@@ -383,6 +383,28 @@ GET /api/activitylog/user/20?page=1&size=3&sort=xpEarned,desc&activityId=1&from=
 
 ---
 
+#### `GET /api/activitylog/user/{id}/recent`
+Quick picks for the "log an activity" screen: the caller's **most-logged active activities**, most logged first. Requires auth. **Owner-only** — `{id}` must be the caller's own, else `403`, like the other per-user reads.
+
+| Param | Default | Rules |
+|---|---|---|
+| `limit` | `5` | `1`–`20`, else a `400` `ProblemDetail` (`"limit must be between 1 and 20 (got 0)"`) |
+
+**Response:** `200 OK`, JSON array (empty for a user with no logs):
+```json
+[ { "activityId": 1, "name": "Deep Work", "category": "WORK", "timesLogged": 61, "lastUsedAt": "2026-10-19T14:22:04" },
+  { "activityId": 3, "name": "Algorithms Study", "category": "STUDY", "timesLogged": 45, "lastUsedAt": "2026-10-18T13:47:00" } ]
+```
+| Field | Notes |
+|---|---|
+| `activityId` | pairs with `GET /api/activity/{id}` |
+| `timesLogged` | the caller's logs for it, **any review status** (a flagged session is still something they chose to log) |
+| `lastUsedAt` | the **start** of their most recent session for it |
+
+Ordered by `timesLogged` descending, then `lastUsedAt` descending, then `activityId`, so the order is total and doesn't reshuffle between calls. **Inactive activities are never included** however often they were logged: logging against one is a `409`, so offering it as a shortcut would just hand the user an error.
+
+---
+
 #### `GET /api/activitylog/streaks/user/{id}`
 List every `(activity, streak)` pair for a user. Requires auth. **Owner-only (#80/#88)** — same rule and same rationale as `GET /api/activitylog/user/{id}` above.
 
