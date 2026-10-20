@@ -30,6 +30,14 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    private static final java.util.regex.Pattern ACTIVITY_CATALOG_PATH = java.util.regex.Pattern.compile("^/api/activity(/.*)?$");
+
+    /** A catalog GET carrying the includeInactive parameter in any form. */
+    private static final org.springframework.security.web.util.matcher.RequestMatcher INCLUDE_INACTIVE_READ =
+            request -> "GET".equals(request.getMethod())
+                    && request.getParameter("includeInactive") != null
+                    && ACTIVITY_CATALOG_PATH.matcher(request.getRequestURI()).matches();
+
     private final UserIdHeaderFilter userIdHeaderFilter;
 
     public SecurityConfig(UserIdHeaderFilter userIdHeaderFilter) {
@@ -58,6 +66,15 @@ public class SecurityConfig {
                                 "/v3/api-docs", "/v3/api-docs/**", "/swagger-resources/**", "/actuator/**")
                         .permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")
+                        // Activity catalog administration. PATCH/DELETE on an activity are
+                        // maintainer-only, and so is ?includeInactive on a catalog read: it exposes
+                        // soft-deleted rows that every other caller must not be able to see (#84).
+                        // The parameter is matched on PRESENCE, not value, because the downstream
+                        // boolean binding also accepts on/yes/1 -- matching only "true" would leave
+                        // a bypass.
+                        .requestMatchers(HttpMethod.PATCH, "/api/activity/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/api/activity/**").hasRole("ADMIN")
+                        .requestMatchers(INCLUDE_INACTIVE_READ).hasRole("ADMIN")
                         // Session integrity (#67): the review queue and its approve/reject
                         // transitions are maintainer-only. activity-service has no Spring Security
                         // of its own, so this is the only place it can be enforced.

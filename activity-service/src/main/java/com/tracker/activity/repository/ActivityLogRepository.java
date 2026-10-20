@@ -18,6 +18,9 @@ import java.util.Optional;
 public interface ActivityLogRepository extends JpaRepository<ActivityLog, Long> {
     List<ActivityLog> findByUserId(Long userId);
 
+    // DELETE /activity/{id}: is this activity part of anyone's history? Decides soft vs hard delete.
+    boolean existsByActivityId(Long activityId);
+
     // #78/#88: ownership-scoped lookup for GET /activitylog/{id} -- a miss here (wrong owner or
     // no such row) is intentionally indistinguishable from a genuinely missing id, so the handler
     // renders the same 404 either way instead of leaking existence via a 403.

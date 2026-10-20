@@ -1,6 +1,8 @@
 package com.tracker.activity.controller;
 
+import com.tracker.activity.dto.ActivityDeleteResponse;
 import com.tracker.activity.dto.ActivityResponseRecord;
+import com.tracker.activity.dto.ActivityUpdateRequest;
 import com.tracker.activity.dto.ActivityRequestRecord;
 import com.tracker.activity.service.ActivityService;
 import jakarta.validation.Valid;
@@ -34,20 +36,41 @@ public class ActivityController {
     // that name. Anything else is a name, exactly as before.
     private static final Pattern DIGITS_ONLY = Pattern.compile("\\d+");
 
+    // includeInactive is an ADMIN-only switch, enforced at the gateway (SecurityConfig) -- this service
+    // has no Spring Security. When false the original no-flag service methods are called unchanged.
     @GetMapping("/{idOrName}")
-    public ResponseEntity<ActivityResponseRecord> getActivity(@PathVariable @NotBlank(message = "name is required") String idOrName) {
-        return DIGITS_ONLY.matcher(idOrName).matches()
-                ? activityService.getActivityByIdOrName(idOrName)
-                : activityService.getActivity(idOrName);
+    public ResponseEntity<ActivityResponseRecord> getActivity(
+            @PathVariable @NotBlank(message = "name is required") String idOrName,
+            @RequestParam(name = "includeInactive", defaultValue = "false") boolean includeInactive) {
+        boolean byId = DIGITS_ONLY.matcher(idOrName).matches();
+        if (includeInactive) {
+            return byId ? activityService.getActivityByIdOrName(idOrName, true)
+                    : activityService.getActivity(idOrName, true);
+        }
+        return byId ? activityService.getActivityByIdOrName(idOrName) : activityService.getActivity(idOrName);
     }
 
     @GetMapping("/")
-    public ResponseEntity<List<ActivityResponseRecord>> getAllActivities() {
-        return activityService.getAllActivities();
+    public ResponseEntity<List<ActivityResponseRecord>> getAllActivities(
+            @RequestParam(name = "includeInactive", defaultValue = "false") boolean includeInactive) {
+        return includeInactive ? activityService.getAllActivities(true) : activityService.getAllActivities();
     }
 
     @PostMapping("/")
     public ResponseEntity<ActivityResponseRecord> addActivity(@Valid @RequestBody ActivityRequestRecord activityRequest) {
         return activityService.addActivityEntity(activityRequest);
+    }
+
+    // ADMIN only (gateway). Partial update; also the active toggle.
+    @PatchMapping("/{id}")
+    public ResponseEntity<ActivityResponseRecord> updateActivity(@PathVariable Long id,
+                                                                  @Valid @RequestBody ActivityUpdateRequest request) {
+        return activityService.updateActivity(id, request);
+    }
+
+    // ADMIN only (gateway). Soft delete while history references the activity, hard delete otherwise.
+    @DeleteMapping("/{id}")
+    public ResponseEntity<ActivityDeleteResponse> deleteActivity(@PathVariable Long id) {
+        return activityService.deleteActivity(id);
     }
 }

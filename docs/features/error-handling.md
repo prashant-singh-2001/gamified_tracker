@@ -25,6 +25,8 @@ flowchart TB
     B -->|"NoSuchElementException"| D["404 ProblemDetail (gamification-service)"]
     B -->|"InactiveActivityException"| I["409 'inactive, re-enable it' (activity-service)"]
     B -->|"MethodArgumentNotValidException<br/>(all three services)<br/>InvalidTimeRangeException"| J["400 'errors' field→message map + joined detail"]
+    B -->|"ActivityNameTakenException"| N["409 name already exists (activity-service)"]
+    B -->|"InvalidActivityUpdateException"| U["400 empty PATCH body (activity-service)"]
     B -->|"HttpMessageNotReadableException"| E["400 'Invalid request body'"]
     B -->|"InvalidCredentialsException"| F["401 'Invalid email or password' (gateway)"]
     B -->|"EmailAlreadyRegisteredException"| K["409 'Email already registered' (gateway)"]

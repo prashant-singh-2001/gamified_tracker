@@ -38,6 +38,16 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, ex.getMessage());
     }
 
+    @ExceptionHandler(ActivityNameTakenException.class)
+    public ProblemDetail handleActivityNameTaken(ActivityNameTakenException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidActivityUpdateException.class)
+    public ProblemDetail handleInvalidActivityUpdate(InvalidActivityUpdateException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
+
     @ExceptionHandler(InactiveActivityException.class)
     public ProblemDetail handleInactiveActivity(InactiveActivityException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
