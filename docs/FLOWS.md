@@ -220,9 +220,10 @@ means "use the `Category` base rate," resolved by `Activity.effectiveXpMultiplie
 
 ### 7a. Reading the catalog
 
-`GET /api/activity` / `GET /api/activity/{name}` (any authenticated role) →
-`ActivityServiceImpl.getAllActivities`/`getActivity` → `ActivityRepository.findAllByActiveTrue`/
-`findByNameAndActiveTrue`. A soft-deleted activity is excluded from the list and returns a plain
+`GET /api/activity` / `GET /api/activity/{idOrName}` (any authenticated role) →
+`ActivityServiceImpl.getAllActivities`/`getActivity`/`getActivityByIdOrName` (the controller sends a digits-only
+segment to the last, which tries the id and falls back to the name) → `ActivityRepository.findAllByActiveTrue`/
+`findByNameAndActiveTrue`/`findByIdAndActiveTrue`. A soft-deleted activity is excluded from the list and returns a plain
 `404` from the single-item lookup — indistinguishable from a name that never existed (issue #84).
 This is a **different** repository method than the one flow 8's exact-match step and the
 fuzzy-suggestion catalog read (below) use — those two stay deliberately unfiltered, since they need

@@ -167,6 +167,7 @@ authenticated user could actually log time against.
 **Response:** `200 OK`, JSON array of:
 | Field | Type |
 |---|---|
+| `id` | long — the activity's id; use it with `GET /api/activity/{id}` |
 | `name` | String |
 | `category` | enum: `STUDY`, `WORK`, `GAMING`, `CHORES`, `HEALTH`, `OTHER` |
 | `xpMultiplier` | double — the **effective** multiplier (per-activity override, else the category base) |
@@ -176,8 +177,11 @@ authenticated user could actually log time against.
 
 ---
 
-#### `GET /api/activity/{name}`
-Fetch one active activity by name. Requires auth (any role).
+#### `GET /api/activity/{idOrName}`
+Fetch one active activity by **id** or by **name**. Requires auth (any role).
+
+- A segment of **digits only** (`/api/activity/5`) is an id: the activity with that id is returned. If there is no active activity with that id, the same digits are tried as a **name**, so an activity actually named `2048` is still reachable at `/api/activity/2048`. (If the digits are one activity's id and another's name, the id wins.)
+- Anything else (`/api/activity/Deep%20Work`) is a name, exactly as before.
 
 - `200 OK` — same shape as above (single object)
 - `404` `ProblemDetail` — not found **or soft-deleted** (issue #84). The two are deliberately
@@ -201,7 +205,7 @@ Create an activity. **Requires `ADMIN` role** — a non-admin token gets `403`.
 | `description` | String | optional |
 | `createdAt` | ISO-8601 datetime string | accepted but **ignored** — the server always sets `createdAt` to the current time |
 
-**Response:** `200 OK`, same shape as `GET /api/activity/{name}`. Note `xpMultiplier` in the response is the **effective** multiplier (the override, or the resolved category base when none was set) — so an activity created without an explicit multiplier reports its category base rather than `0.0`.
+**Response:** `200 OK`, same shape as `GET /api/activity/{idOrName}` (including the new activity's `id`). Note `xpMultiplier` in the response is the **effective** multiplier (the override, or the resolved category base when none was set) — so an activity created without an explicit multiplier reports its category base rather than `0.0`.
 
 ---
 
@@ -504,8 +508,8 @@ Base path `/activity` and `/activitylog`. No auth layer of its own — auth is o
 #### `GET /activity/`
 List all activities. Same response shape as the Gateway's `GET /api/activity`.
 
-#### `GET /activity/{name}`
-Fetch one activity by name. `200 OK` with the activity, or `404` `ProblemDetail` (`"Activity not found: {name}"`) if missing.
+#### `GET /activity/{idOrName}`
+Fetch one activity by id or name (digits only = an id, with a fallback to the same digits as a name; see the Gateway section above). `200 OK` with the activity, or `404` `ProblemDetail` (`"Activity not found: {idOrName}"`) if missing.
 
 #### `POST /activity/`
 Create an activity. Same request/response shape as the Gateway's `POST /api/activity` (no role check at this layer — that's Gateway-only).
