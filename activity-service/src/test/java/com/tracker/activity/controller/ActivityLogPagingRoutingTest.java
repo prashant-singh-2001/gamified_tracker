@@ -3,6 +3,8 @@ package com.tracker.activity.controller;
 import com.tracker.activity.domain.ActivityLogQuery;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.PagedResponse;
+import com.tracker.activity.dto.RecentActivityResponse;
+import com.tracker.activity.dao.Category;
 import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.service.ActivityLogService;
 import com.tracker.activity.service.NaturalLogService;
@@ -15,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -155,6 +158,55 @@ class ActivityLogPagingRoutingTest {
                 .thenThrow(new OwnershipViolationException("Not permitted to access another user's data"));
 
         mockMvc.perform(get("/activitylog/user/2").param("page", "0").header("userId", 1L))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /user/{id}/recent: default limit 5, the picks in the response, owner from the header")
+    void recentPicks() throws Exception {
+        when(activityLogService.getRecentActivities(7L, 7L, 5)).thenReturn(ResponseEntity.ok(List.of(
+                new RecentActivityResponse(3L, "Run", Category.HEALTH, 12L, LocalDateTime.of(2026, 10, 9, 18, 30)))));
+
+        mockMvc.perform(get("/activitylog/user/7/recent").header("userId", 7L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].activityId").value(3))
+                .andExpect(jsonPath("$[0].name").value("Run"))
+                .andExpect(jsonPath("$[0].category").value("HEALTH"))
+                .andExpect(jsonPath("$[0].timesLogged").value(12))
+                .andExpect(jsonPath("$[0].lastUsedAt").value("2026-10-09T18:30:00"));
+    }
+
+    @Test
+    @DisplayName("GET /user/{id}/recent?limit=N passes N through, and does not touch the logs list")
+    void recentLimitIsPassedThrough() throws Exception {
+        when(activityLogService.getRecentActivities(7L, 7L, 3)).thenReturn(ResponseEntity.ok(List.of()));
+
+        mockMvc.perform(get("/activitylog/user/7/recent").param("limit", "3").header("userId", 7L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray());
+
+        verify(activityLogService, never()).getAllActivityForUser(any(), any());
+        verify(activityLogService, never()).getActivityForUserPaged(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("GET /user/{id}/recent: a bad limit is a 400 ProblemDetail and nothing is queried")
+    void recentBadLimit() throws Exception {
+        for (String bad : List.of("0", "21", "-1", "lots")) {
+            mockMvc.perform(get("/activitylog/user/7/recent").param("limit", bad).header("userId", 7L))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400));
+        }
+        verifyNoInteractions(activityLogService);
+    }
+
+    @Test
+    @DisplayName("GET /user/{id}/recent is owner-only: another user's picks are a 403")
+    void recentIsOwnerOnly() throws Exception {
+        when(activityLogService.getRecentActivities(1L, 2L, 5))
+                .thenThrow(new OwnershipViolationException("Not permitted to access another user's data"));
+
+        mockMvc.perform(get("/activitylog/user/2/recent").header("userId", 1L))
                 .andExpect(status().isForbidden());
     }
 }

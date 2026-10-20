@@ -13,6 +13,7 @@ import com.tracker.activity.domain.DurationOutlierDetector;
 import com.tracker.activity.domain.MatchField;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
+import com.tracker.activity.dto.RecentActivityProjection;
 import com.tracker.activity.dto.ActivitySuggestion;
 import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.exception.ActivityNameUnresolvedException;
@@ -39,6 +40,7 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.ResponseEntity;
 
@@ -365,6 +367,50 @@ public class ActivityLogServiceImplTest {
         assertThrows(OwnershipViolationException.class,
                 () -> activityLogService.getActivityForUserPaged(1L, 2L, ActivityLogQuery.parse(null, null, null, null, null, null)));
         verifyNoInteractions(activityLogRepository);
+    }
+
+    @Test
+    @DisplayName("getRecentActivities maps the projection, defaulting a missing count to zero")
+    void testGetRecentActivities() {
+        RecentActivityProjection a = projection(1L, "Run", Category.HEALTH, 5L, LocalDateTime.of(2026, 10, 9, 18, 30));
+        RecentActivityProjection b = projection(2L, "Study", Category.STUDY, null, LocalDateTime.of(2026, 10, 8, 9, 0));
+        when(activityLogRepository.findMostLoggedActivities(2L, PageRequest.of(0, 3))).thenReturn(List.of(a, b));
+
+        var picks = activityLogService.getRecentActivities(2L, 2L, 3).getBody();
+
+        assertEquals(2, picks.size());
+        assertEquals("Run", picks.get(0).name());
+        assertEquals(Category.HEALTH, picks.get(0).category());
+        assertEquals(5L, picks.get(0).timesLogged());
+        assertEquals(LocalDateTime.of(2026, 10, 9, 18, 30), picks.get(0).lastUsedAt());
+        assertEquals(0L, picks.get(1).timesLogged());
+    }
+
+    @Test
+    @DisplayName("getRecentActivities asks the repository for exactly `limit` rows")
+    void testGetRecentActivities_passesTheLimit() {
+        when(activityLogRepository.findMostLoggedActivities(2L, PageRequest.of(0, 7))).thenReturn(List.of());
+
+        assertEquals(List.of(), activityLogService.getRecentActivities(2L, 2L, 7).getBody());
+
+        verify(activityLogRepository).findMostLoggedActivities(2L, PageRequest.of(0, 7));
+    }
+
+    @Test
+    @DisplayName("getRecentActivities rejects another user's picks before any query (#79/#88)")
+    void testGetRecentActivities_rejectsOtherUser() {
+        assertThrows(OwnershipViolationException.class, () -> activityLogService.getRecentActivities(1L, 2L, 5));
+        verifyNoInteractions(activityLogRepository);
+    }
+
+    private static RecentActivityProjection projection(Long id, String name, Category category, Long times, LocalDateTime last) {
+        return new RecentActivityProjection() {
+            public Long getActivityId() { return id; }
+            public String getActivityName() { return name; }
+            public Category getCategory() { return category; }
+            public Long getTimesLogged() { return times; }
+            public LocalDateTime getLastUsedAt() { return last; }
+        };
     }
     @Test
     @DisplayName("getStreaksForUser returns mapped list")

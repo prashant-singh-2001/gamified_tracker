@@ -31,6 +31,18 @@ public record ActivityLogQuery(Long activityId, LocalDate from, LocalDate to, in
     /** The only fields a client may sort by: real columns, so a typo cannot reach the query layer. */
     public static final Set<String> SORTABLE = Set.of("startTime", "endTime", "createdAt", "xpEarned", "durationMinutes");
 
+    public static final int DEFAULT_RECENT_LIMIT = 5;
+    public static final int MAX_RECENT_LIMIT = 20;
+
+    /** {@code ?limit=} for the quick-picks endpoint: a small, bounded result. */
+    public static int parseRecentLimit(String raw) {
+        int limit = parseInt("limit", raw, DEFAULT_RECENT_LIMIT);
+        if (limit < 1 || limit > MAX_RECENT_LIMIT) {
+            throw new InvalidPagingException("limit must be between 1 and " + MAX_RECENT_LIMIT + " (got " + limit + ")");
+        }
+        return limit;
+    }
+
     public static ActivityLogQuery parse(String page, String size, String sort,
                                          String activityId, String from, String to) {
         int pageIndex = parseInt("page", page, 0);

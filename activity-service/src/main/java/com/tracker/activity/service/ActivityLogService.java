@@ -4,6 +4,7 @@ import com.tracker.activity.domain.ActivityLogQuery;
 import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.PagedResponse;
+import com.tracker.activity.dto.RecentActivityResponse;
 import com.tracker.activity.dto.StreakResponse;
 import org.springframework.http.ResponseEntity;
 
@@ -21,6 +22,10 @@ public interface ActivityLogService {
     // The paged, sortable, filterable form of the above. Same ownership rule (403 for anyone but the
     // owner); the unpaged method stays for clients that have not switched.
     ResponseEntity<PagedResponse<ActivityLogResponse>> getActivityForUserPaged(Long callerUserId, Long id, ActivityLogQuery query);
+
+    // Quick picks: the caller's most-logged active activities, most-logged first. Owner-only, like the
+    // other per-user reads (403 for anyone else).
+    ResponseEntity<List<RecentActivityResponse>> getRecentActivities(Long callerUserId, Long id, int limit);
 
     ResponseEntity<ActivityLogResponse> addActivityLogResponseResponseEntity(Long userId, ActivityLogRequest addActivityLogRequest);
 

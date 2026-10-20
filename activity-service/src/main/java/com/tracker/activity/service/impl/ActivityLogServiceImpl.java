@@ -13,6 +13,7 @@ import com.tracker.activity.dto.ActivityLogRequest;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.ActivityNameResolution;
 import com.tracker.activity.dto.PagedResponse;
+import com.tracker.activity.dto.RecentActivityResponse;
 import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.exception.ActivityNameUnresolvedException;
 import com.tracker.activity.exception.ActivityNotFoundException;
@@ -33,6 +34,7 @@ import com.tracker.contracts.event.ActivityLoggedEvent;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.AllArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -267,6 +269,21 @@ public class ActivityLogServiceImpl implements ActivityLogService {
 
         return ResponseEntity.ok(new PagedResponse<>(content, page.getNumber(), page.getSize(),
                 page.getTotalElements(), page.getTotalPages(), query.sortDescription()));
+    }
+
+    @Override
+    public ResponseEntity<List<RecentActivityResponse>> getRecentActivities(Long callerUserId, Long id, int limit) {
+        // Same #79/#88 rule as the other per-user reads: the subject is in the path, so a 403 leaks nothing.
+        if (!callerUserId.equals(id)) {
+            throw new OwnershipViolationException("Not permitted to access another user's data");
+        }
+
+        var picks = activityLogRepository.findMostLoggedActivities(id, PageRequest.of(0, limit)).stream()
+                .map(p -> new RecentActivityResponse(p.getActivityId(), p.getActivityName(), p.getCategory(),
+                        p.getTimesLogged() == null ? 0L : p.getTimesLogged(), p.getLastUsedAt()))
+                .toList();
+
+        return ResponseEntity.ok(picks);
     }
 
     private ActivityLog mapToActivityLog(Long userId, ActivityLogRequest activityLogRequest, Activity activity) {
