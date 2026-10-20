@@ -853,6 +853,8 @@ Any route that fails to match at all (e.g. a typo'd path) still falls back to Sp
 
 ---
 
+**The same bodies are in the generated OpenAPI.** Each service serves `/v3/api-docs` (activity `:8081`, gamification `:8082`, gateway `:8080` for `/auth/**` and `/users/me`) with a shared `Problem` schema, named error examples under `components.examples`, and the 4xx responses attached to each operation. The `/auth/**` `429` is not a Problem: its body is `{"error": "Too many requests"}` and has its own `RateLimited` schema. See [Error Handling](docs/features/error-handling.md#error-bodies-in-the-openapi-spec).
+
 ## Known Issues Summary
 
 All previously-tracked issues in this section have been resolved and verified end-to-end:
