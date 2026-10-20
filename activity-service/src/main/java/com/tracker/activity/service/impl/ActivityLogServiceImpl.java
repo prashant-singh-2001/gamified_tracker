@@ -224,9 +224,11 @@ public class ActivityLogServiceImpl implements ActivityLogService {
         if (!callerUserId.equals(userId)) {
             throw new OwnershipViolationException("Not permitted to access another user's data");
         }
-        var streaks = activityStreakRepository.findByUserId(userId).stream().map(
-                s -> new StreakResponse(s.getActivityId(), s.getCurrentStreak(), s.getLongestStreak(), s.getLastActivityDate())
-        ).toList();
+        // "Today" is UTC to match the rest of the API's zone-less timestamps, not the server's default zone.
+        LocalDate todayUtc = LocalDate.now(java.time.ZoneOffset.UTC);
+        var streaks = activityStreakRepository.findByUserId(userId).stream()
+                .map(s -> StreakResponse.from(s, todayUtc))
+                .toList();
         return ResponseEntity.ok(streaks);
     }
 
