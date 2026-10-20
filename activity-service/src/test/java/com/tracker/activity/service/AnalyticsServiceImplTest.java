@@ -3,6 +3,7 @@ package com.tracker.activity.service;
 import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.domain.ReportMode;
 import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
@@ -29,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -189,6 +191,126 @@ public class AnalyticsServiceImplTest {
         assertEquals(120L, report.totalActiveMinutes());
         assertEquals(Category.STUDY, report.topCategory());
         assertEquals(7, report.dailyBreakdown().size());
+    }
+
+    // ---- report modes: "today" is pinned to Wednesday 2026-01-07 (its Monday is 2026-01-05; last
+    // week's Monday is 2025-12-29, so the previous window crosses a year boundary) ----
+
+    private static final LocalDate WEDNESDAY = LocalDate.of(2026, 1, 7);
+
+    private ActivityLog logOn(long id, LocalDate date, Activity activity, long minutes, double xp) {
+        return ActivityLog.builder().id(id).userId(1L).activity(activity)
+                .startTime(date.atTime(10, 0)).durationMinutes(minutes).xpEarned(xp).build();
+    }
+
+    private List<ActivityLog> modeFixtureLogs() {
+        return List.of(
+                // this calendar week, Mon..Wed
+                logOn(1, LocalDate.of(2026, 1, 5), studyActivity, 60, 100.0),
+                logOn(2, LocalDate.of(2026, 1, 6), gamingActivity, 30, 40.0),
+                logOn(3, LocalDate.of(2026, 1, 7), studyActivity, 45, 60.0),
+                // last calendar week, Mon and Tue: inside the like-for-like window
+                logOn(4, LocalDate.of(2025, 12, 29), studyActivity, 50, 80.0),
+                logOn(5, LocalDate.of(2025, 12, 30), gamingActivity, 20, 20.0),
+                // last week's Thu and Sat: AFTER the like-for-like cut-off in calendar mode, but
+                // inside the current seven-day window in rolling mode
+                logOn(6, LocalDate.of(2026, 1, 1), studyActivity, 10, 500.0),
+                logOn(7, LocalDate.of(2026, 1, 3), studyActivity, 10, 1000.0));
+    }
+
+    @Test
+    @DisplayName("calendar mode: Monday..today against the same weekdays of last week, like for like")
+    void testGetWeeklyReport_calendarMode() {
+        when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(modeFixtureLogs());
+
+        WeeklyReportResponse report = analyticsService
+                .getWeeklyReport(1L, 1L, ReportMode.CALENDAR, WEDNESDAY).getBody();
+
+        assertEquals(ReportMode.CALENDAR, report.mode());
+        assertEquals(200.0, report.currentWeekXp(), 1e-9, "Mon+Tue+Wed");
+        assertEquals(100.0, report.previousWeekXp(), 1e-9,
+                "last Mon+Tue only -- the Thu/Sat logs are past the like-for-like cut-off");
+        assertEquals(100.0, report.percentageChange(), 1e-9);
+        assertEquals(135L, report.totalActiveMinutes());
+        assertEquals(Category.STUDY, report.topCategory());
+
+        assertEquals(LocalDate.of(2026, 1, 5), report.periodStart());
+        assertEquals(LocalDate.of(2026, 1, 11), report.periodEnd(), "the Sunday");
+        assertEquals(LocalDate.of(2025, 12, 29), report.previousPeriodStart());
+        assertEquals(LocalDate.of(2025, 12, 31), report.previousPeriodEnd());
+    }
+
+    @Test
+    @DisplayName("calendar mode: the breakdown is always Monday..Sunday, days after today present and zero")
+    void testGetWeeklyReport_calendarBreakdownIsAFullWeek() {
+        when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(modeFixtureLogs());
+
+        var days = analyticsService.getWeeklyReport(1L, 1L, ReportMode.CALENDAR, WEDNESDAY).getBody().dailyBreakdown();
+
+        assertEquals(7, days.size());
+        assertEquals(LocalDate.of(2026, 1, 5), days.get(0).date());
+        assertEquals(LocalDate.of(2026, 1, 11), days.get(6).date());
+        assertEquals(100.0, days.get(0).totalXpEarned(), 1e-9, "Monday");
+        assertEquals(60.0, days.get(2).totalXpEarned(), 1e-9, "Wednesday (today)");
+        for (int i = 3; i < 7; i++) {
+            assertEquals(0.0, days.get(i).totalXpEarned(), 1e-9, "Thu..Sun are in the future: zero");
+        }
+    }
+
+    @Test
+    @DisplayName("rolling mode (the default) still counts the seven days ending today -- the same logs give a different answer")
+    void testGetWeeklyReport_rollingModeUnchanged() {
+        when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(modeFixtureLogs());
+
+        WeeklyReportResponse report = analyticsService
+                .getWeeklyReport(1L, 1L, ReportMode.ROLLING, WEDNESDAY).getBody();
+
+        assertEquals(ReportMode.ROLLING, report.mode());
+        // Jan 1..Jan 7: everything this week plus the Thu/Sat logs
+        assertEquals(1700.0, report.currentWeekXp(), 1e-9);
+        // Dec 25..Dec 31
+        assertEquals(100.0, report.previousWeekXp(), 1e-9);
+        assertEquals(1600.0, report.percentageChange(), 1e-9);
+        assertEquals(LocalDate.of(2026, 1, 1), report.periodStart());
+        assertEquals(WEDNESDAY, report.periodEnd());
+        assertEquals(LocalDate.of(2025, 12, 25), report.previousPeriodStart());
+        assertEquals(LocalDate.of(2025, 12, 31), report.previousPeriodEnd());
+        assertEquals(7, report.dailyBreakdown().size());
+        assertEquals(WEDNESDAY, report.dailyBreakdown().get(6).date());
+    }
+
+    @Test
+    @DisplayName("the two-argument getWeeklyReport (used by the insights digest) is the rolling report")
+    void testGetWeeklyReport_twoArgFormIsRolling() {
+        when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of());
+
+        assertEquals(ReportMode.ROLLING, analyticsService.getWeeklyReport(1L, 1L).getBody().mode());
+    }
+
+    @Test
+    @DisplayName("the repository is asked for exactly previous-window-start .. end of today, in either mode")
+    void testGetWeeklyReport_queryBounds() {
+        when(activityLogRepository.findByUserIdAndStartTimeBetween(eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)))
+                .thenReturn(List.of());
+
+        analyticsService.getWeeklyReport(1L, 1L, ReportMode.CALENDAR, WEDNESDAY);
+        analyticsService.getWeeklyReport(1L, 1L, ReportMode.ROLLING, WEDNESDAY);
+
+        verify(activityLogRepository).findByUserIdAndStartTimeBetween(
+                1L, LocalDate.of(2025, 12, 29).atStartOfDay(), WEDNESDAY.atTime(java.time.LocalTime.MAX));
+        verify(activityLogRepository).findByUserIdAndStartTimeBetween(
+                1L, LocalDate.of(2025, 12, 25).atStartOfDay(), WEDNESDAY.atTime(java.time.LocalTime.MAX));
+    }
+
+    @Test
+    @DisplayName("calendar mode keeps the ownership rule: another user's report is refused")
+    void testGetWeeklyReport_calendarRejectsOtherUser() {
+        assertThrows(com.tracker.activity.exception.OwnershipViolationException.class,
+                () -> analyticsService.getWeeklyReport(1L, 2L, ReportMode.CALENDAR, WEDNESDAY));
     }
 
     @Test

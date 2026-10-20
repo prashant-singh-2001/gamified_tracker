@@ -65,22 +65,36 @@ list via `getOrDefault`. A day with zero activity still gets a `DailyXpResponse(
 — `GET .../xp-over-time?days=7` always returns exactly 7 entries, so a client can plot a continuous
 line chart without patching gaps itself.
 
-### 3. One query for two weeks — `getWeeklyReport`
+### 3. One query for two windows — `getWeeklyReport`, in two modes
 
 ```java
-LocalDateTime prevStart = previousWeekStart.atStartOfDay();
+ReportWindow window = ReportWindow.of(mode, today);           // pure function of "today"
+LocalDateTime from = window.previousStart().atStartOfDay();
 LocalDateTime endNow = today.atTime(LocalTime.MAX);
-List<ActivityLog> logs = activityLogRepository.findByUserIdAndStartTimeBetween(userId, prevStart, endNow);
+List<ActivityLog> logs = activityLogRepository.findByUserIdAndStartTimeBetween(userId, from, endNow);
 
-List<ActivityLog> currentWeekLogs = logs.stream().filter(l -> !l.getStartTime().isBefore(currentStart)).toList();
-List<ActivityLog> previousWeekLogs = logs.stream().filter(l -> l.getStartTime().isBefore(currentStart)).toList();
+List<ActivityLog> currentWeekLogs  = logs.stream().filter(l -> window.inCurrent(l.getStartTime().toLocalDate())).toList();
+List<ActivityLog> previousWeekLogs = logs.stream().filter(l -> window.inPrevious(l.getStartTime().toLocalDate())).toList();
 ```
-Both the current and previous 7-day windows are fetched in a single `BETWEEN` query spanning both,
-then partitioned by comparing `startTime` against the boundary in memory — one round trip instead
-of two, at the cost of pulling slightly more rows than either window needs alone.
+Both windows are fetched in a single `BETWEEN` query spanning them, then partitioned in memory by
+start **date** — one round trip instead of two, at the cost of pulling slightly more rows than
+either window needs alone.
+
+The "week" is a `?mode=` (`ReportWindow`, a pure function of today so it is tested with fixed dates
+rather than a clock):
+
+- **`rolling`** (default, unchanged): the seven days ending today vs the seven before.
+- **`calendar`**: the ISO Monday-to-Sunday week containing today. The previous window is the **same
+  weekdays of last week**, not the whole of it — "this week so far" against a full week would read as
+  a slump from Monday to Saturday. So the two windows are always equal in length, and the response
+  carries `periodStart/End` and `previousPeriodStart/End` so a client can label exactly what was
+  compared. In calendar mode `dailyBreakdown` is the full Monday..Sunday (days after today zero).
+
+The AI digest delegates to the rolling report (`AnalyticsService.getWeeklyReport(caller, user)`), so
+the digest and the report cannot disagree. → [API.md § Weekly report modes](../../API.md#weekly-report-modes).
 
 `topCategory` is resolved with a `groupingBy(category, summingDouble(xpEarned))` followed by
-`max(Map.Entry.comparingByValue())` over the **current week's** logs only — the category with the
+`max(Map.Entry.comparingByValue())` over the **current window's** logs only — the category with the
 most XP this week, not the most sessions.
 
 ### 4. "Analytics, not ML" — `getBestTimeOfDay` (issue #72)

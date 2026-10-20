@@ -5,6 +5,7 @@ import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
 import com.tracker.activity.dto.HourOfDayXpResponse;
+import com.tracker.activity.domain.ReportMode;
 import com.tracker.activity.dto.WeeklyReportResponse;
 import com.tracker.activity.exception.OwnershipViolationException;
 import com.tracker.activity.service.AnalyticsService;
@@ -21,6 +22,9 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -113,10 +117,12 @@ public class AnalyticsControllerTest {
         Long userId = 1L;
         DailyXpResponse dailyResponse = new DailyXpResponse(LocalDate.now(), 90.0, 60L);
         WeeklyReportResponse report = new WeeklyReportResponse(
-                180.0, 90.0, 100.0, 120L, Category.STUDY, List.of(dailyResponse)
+                180.0, 90.0, 100.0, 120L, Category.STUDY, List.of(dailyResponse),
+                ReportMode.ROLLING, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 7),
+                LocalDate.of(2025, 12, 25), LocalDate.of(2025, 12, 31)
         );
 
-        when(analyticsService.getWeeklyReport(userId, userId))
+        when(analyticsService.getWeeklyReport(userId, userId, ReportMode.ROLLING))
                 .thenReturn(ResponseEntity.ok(report));
 
         mockMvc.perform(get("/activitylog/analytics/user/{userId}/weekly-report", userId)
@@ -127,7 +133,60 @@ public class AnalyticsControllerTest {
                 .andExpect(jsonPath("$.previousWeekXp").value(90.0))
                 .andExpect(jsonPath("$.percentageChange").value(100.0))
                 .andExpect(jsonPath("$.totalActiveMinutes").value(120))
-                .andExpect(jsonPath("$.topCategory").value("STUDY"));
+                .andExpect(jsonPath("$.topCategory").value("STUDY"))
+                // the window description is part of the response, so a client can label the report
+                .andExpect(jsonPath("$.mode").value("ROLLING"))
+                .andExpect(jsonPath("$.periodStart").value("2026-01-01"))
+                .andExpect(jsonPath("$.periodEnd").value("2026-01-07"))
+                .andExpect(jsonPath("$.previousPeriodStart").value("2025-12-25"))
+                .andExpect(jsonPath("$.previousPeriodEnd").value("2025-12-31"));
+    }
+
+    private static WeeklyReportResponse calendarReport() {
+        return new WeeklyReportResponse(200.0, 100.0, 100.0, 135L, Category.STUDY, List.of(),
+                ReportMode.CALENDAR, LocalDate.of(2026, 1, 5), LocalDate.of(2026, 1, 11),
+                LocalDate.of(2025, 12, 29), LocalDate.of(2025, 12, 31));
+    }
+
+    @Test
+    @DisplayName("weekly-report with no mode parameter is the ROLLING report, exactly as before modes existed")
+    void testGetWeeklyReport_noModeIsRolling() throws Exception {
+        when(analyticsService.getWeeklyReport(1L, 1L, ReportMode.ROLLING))
+                .thenReturn(ResponseEntity.ok(calendarReport()));
+
+        mockMvc.perform(get("/activitylog/analytics/user/{userId}/weekly-report", 1L).header("userId", 1L))
+                .andExpect(status().isOk());
+
+        verify(analyticsService).getWeeklyReport(1L, 1L, ReportMode.ROLLING);
+        verify(analyticsService, never()).getWeeklyReport(1L, 1L, ReportMode.CALENDAR);
+    }
+
+    @Test
+    @DisplayName("?mode=calendar (any case) asks the service for the Monday-to-Sunday report")
+    void testGetWeeklyReport_calendarMode() throws Exception {
+        when(analyticsService.getWeeklyReport(1L, 1L, ReportMode.CALENDAR))
+                .thenReturn(ResponseEntity.ok(calendarReport()));
+
+        for (String value : List.of("calendar", "CALENDAR", "Calendar")) {
+            mockMvc.perform(get("/activitylog/analytics/user/{userId}/weekly-report", 1L)
+                            .param("mode", value).header("userId", 1L))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.mode").value("CALENDAR"))
+                    .andExpect(jsonPath("$.periodStart").value("2026-01-05"))
+                    .andExpect(jsonPath("$.periodEnd").value("2026-01-11"));
+        }
+    }
+
+    @Test
+    @DisplayName("an unknown mode is a 400 ProblemDetail naming the valid values -- never a silent fallback")
+    void testGetWeeklyReport_unknownModeIs400() throws Exception {
+        mockMvc.perform(get("/activitylog/analytics/user/{userId}/weekly-report", 1L)
+                        .param("mode", "monthly").header("userId", 1L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.detail").value("mode must be one of: rolling, calendar (got 'monthly')"));
+
+        verifyNoInteractions(analyticsService);
     }
 
     @Test
@@ -136,7 +195,7 @@ public class AnalyticsControllerTest {
         Long callerUserId = 1L;
         Long otherUsersId = 2L;
 
-        when(analyticsService.getWeeklyReport(callerUserId, otherUsersId))
+        when(analyticsService.getWeeklyReport(callerUserId, otherUsersId, ReportMode.ROLLING))
                 .thenThrow(new OwnershipViolationException("Not permitted to access another user's data"));
 
         mockMvc.perform(get("/activitylog/analytics/user/{userId}/weekly-report", otherUsersId)
