@@ -24,6 +24,9 @@ class LevelUpEventRepositoryTest {
     @Autowired
     private LevelUpEventRepository levelUpEventRepository;
 
+    @Autowired
+    private jakarta.persistence.EntityManager entityManager;
+
     private LevelUpEvent event(Long userId, Long activityId, boolean read, LocalDateTime createdAt) {
         return LevelUpEvent.builder()
                 .userId(userId)
@@ -91,5 +94,39 @@ class LevelUpEventRepositoryTest {
         Optional<LevelUpEvent> result = levelUpEventRepository.findByIdAndUserId(saved.getId(), 999L);
 
         assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void markAllReadForUser_flipsOnlyTheCallersUnreadRows_andReportsHowMany() {
+        LocalDateTime now = LocalDateTime.now();
+        levelUpEventRepository.save(event(1L, 1L, false, now));
+        levelUpEventRepository.save(event(1L, 2L, false, now.minusMinutes(1)));
+        levelUpEventRepository.save(event(1L, 3L, true, now.minusMinutes(2)));   // already read
+        levelUpEventRepository.save(event(2L, 1L, false, now));                  // someone else's
+        levelUpEventRepository.flush();
+
+        int updated = levelUpEventRepository.markAllReadForUser(1L);
+        levelUpEventRepository.flush();
+        // the bulk UPDATE bypasses the persistence context; reload from the database
+        entityManager.clear();
+
+        assertEquals(2, updated, "only the caller's two UNREAD rows");
+        assertEquals(0, levelUpEventRepository.countByUserIdAndReadFalse(1L));
+        assertEquals(1, levelUpEventRepository.countByUserIdAndReadFalse(2L), "another user's notification is untouched");
+        assertEquals(3, levelUpEventRepository.findByUserIdOrderByCreatedAtDesc(1L).size(), "nothing deleted");
+    }
+
+    @Test
+    void markAllReadForUser_isIdempotent() {
+        levelUpEventRepository.save(event(1L, 1L, false, LocalDateTime.now()));
+        levelUpEventRepository.flush();
+
+        assertEquals(1, levelUpEventRepository.markAllReadForUser(1L));
+        assertEquals(0, levelUpEventRepository.markAllReadForUser(1L), "nothing left to flip the second time");
+    }
+
+    @Test
+    void markAllReadForUser_withNoNotificationsIsZero() {
+        assertEquals(0, levelUpEventRepository.markAllReadForUser(42L));
     }
 }

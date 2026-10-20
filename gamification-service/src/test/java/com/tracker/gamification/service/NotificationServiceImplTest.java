@@ -92,6 +92,15 @@ class NotificationServiceImplTest {
     }
 
     @Test
+    @DisplayName("markAllRead delegates to the bulk update and returns how many rows it flipped")
+    void markAllRead_delegatesAndReturnsTheCount() {
+        when(levelUpEventRepository.markAllReadForUser(1L)).thenReturn(4);
+
+        assertEquals(4, notificationService.markAllRead(1L));
+        verify(levelUpEventRepository).markAllReadForUser(1L);
+    }
+
+    @Test
     @DisplayName("markRead sets read=true and saves when the event is owned by the caller")
     void markRead_found_marksReadAndSaves() {
         LevelUpEvent event = LevelUpEvent.builder()

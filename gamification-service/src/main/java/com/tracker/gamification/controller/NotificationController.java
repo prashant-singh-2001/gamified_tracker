@@ -21,9 +21,21 @@ public class NotificationController {
         return ResponseEntity.ok(notificationService.getForUser(userId, unreadOnly));
     }
 
+    // Both keys carry the same number. "Count" (capital C) is the original key and is DEPRECATED: it
+    // was a naming slip, every other field in the API is camelCase. It stays so existing clients keep
+    // working; new code reads "count". Removing "Count" is a breaking change to schedule with the
+    // frontend, not to slip in.
     @GetMapping("/unread-count")
     public ResponseEntity<Map<String, Long>> findAllByUserId(@RequestHeader Long userId) {
-        return ResponseEntity.ok(Map.of("Count", notificationService.unreadCount(userId)));
+        long unread = notificationService.unreadCount(userId);
+        return ResponseEntity.ok(Map.of("count", unread, "Count", unread));
+    }
+
+    // Marks every unread notification of the caller read. Idempotent: calling it again flips nothing
+    // and answers {"updated": 0}. Only ever touches the caller's own rows (userId from the trusted header).
+    @PostMapping("/read-all")
+    public ResponseEntity<Map<String, Integer>> markAllRead(@RequestHeader("userId") Long userId) {
+        return ResponseEntity.ok(Map.of("updated", notificationService.markAllRead(userId)));
     }
 
     @PostMapping("/{id}/read")

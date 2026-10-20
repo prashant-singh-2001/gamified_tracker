@@ -89,6 +89,66 @@ public class NotificationControllerTest {
     }
 
     @Test
+    @DisplayName("unread-count returns the lowercase 'count' AND the deprecated capital-C 'Count', with the same value")
+    void unreadCount_hasBothKeys() throws Exception {
+        when(notificationService.unreadCount(1L)).thenReturn(3L);
+
+        mockMvc.perform(get("/notifications/unread-count")
+                        .header("userId", 1L)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(3))
+                .andExpect(jsonPath("$.Count").value(3))
+                .andExpect(jsonPath("$.length()").value(2));
+    }
+
+    @Test
+    @DisplayName("POST /notifications/read-all marks the caller's notifications read and reports how many")
+    void readAll_returnsHowManyWereUpdated() throws Exception {
+        when(notificationService.markAllRead(1L)).thenReturn(4);
+
+        mockMvc.perform(post("/notifications/read-all")
+                        .header("userId", 1L)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updated").value(4));
+
+        verify(notificationService).markAllRead(1L);
+    }
+
+    @Test
+    @DisplayName("POST /notifications/read-all with nothing unread is a 200 with updated=0 (idempotent)")
+    void readAll_nothingUnread() throws Exception {
+        when(notificationService.markAllRead(1L)).thenReturn(0);
+
+        mockMvc.perform(post("/notifications/read-all").header("userId", 1L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.updated").value(0));
+    }
+
+    @Test
+    @DisplayName("read-all takes the user from the trusted header only -- there is no way to name another user")
+    void readAll_usesTheHeaderUser() throws Exception {
+        when(notificationService.markAllRead(7L)).thenReturn(1);
+
+        mockMvc.perform(post("/notifications/read-all").header("userId", 7L).param("userId", "1"))
+                .andExpect(status().isOk());
+
+        verify(notificationService).markAllRead(7L);
+        verify(notificationService, org.mockito.Mockito.never()).markAllRead(1L);
+    }
+
+    @Test
+    @DisplayName("read-all does not collide with POST /{id}/read")
+    void readAll_doesNotShadowMarkRead() throws Exception {
+        mockMvc.perform(post("/notifications/5/read").header("userId", 1L))
+                .andExpect(status().isNoContent());
+
+        verify(notificationService).markRead(1L, 5L);
+        verify(notificationService, org.mockito.Mockito.never()).markAllRead(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
     @DisplayName("POST /notifications/{id}/read marks the event read and returns 204")
     void markRead_returnsNoContent() throws Exception {
         mockMvc.perform(post("/notifications/5/read").header("userId", 1L))
