@@ -2,6 +2,7 @@ package com.tracker.gamification.repository;
 
 import com.tracker.gamification.dao.RankTier;
 import com.tracker.gamification.dao.UserRank;
+import com.tracker.gamification.dto.TierFloorProjection;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -21,6 +22,12 @@ public interface UserRankRepository extends JpaRepository<UserRank, Long> {
     List<UserRank> findByTierOrderByTotalXpDesc(RankTier tier, Pageable pageable);
 
     long countByTier(RankTier tier);
+
+    // One row per POPULATED tier: its lowest XP. Backs the rank nudge on GET /ranks/me. An empty
+    // tier simply has no row, which is how the service knows to skip it. Covered by an index-only
+    // scan of idx_user_rank_tier_total_xp (V6); at most nine rows come back.
+    @Query("SELECT r.tier AS tier, MIN(r.totalXp) AS minTotalXp FROM UserRank r GROUP BY r.tier")
+    List<TierFloorProjection> findTierFloors();
 
 
     @Modifying(flushAutomatically = true)

@@ -40,7 +40,7 @@ public class RankControllerTest {
     @Test
     @DisplayName("GET /ranks/me reads the caller's id from the userId header and returns their card")
     void testGetMyRank() throws Exception {
-        var card = new RankCardDto(RankTier.SUMMIT, 5, 5000.0, 0.02, 1, 50, LocalDateTime.now());
+        var card = new RankCardDto(RankTier.SUMMIT, 5, 5000.0, 0.02, 1, 50, LocalDateTime.now(), true, null, null, null);
         when(rankService.getRankCard(7L)).thenReturn(Optional.of(card));
 
         mockMvc.perform(get("/ranks/me").header("userId", 7L).accept(MediaType.APPLICATION_JSON))
@@ -61,6 +61,60 @@ public class RankControllerTest {
     }
 
     @Test
+    @DisplayName("GET /ranks/me?allowUnranked=true answers 200 {ranked:false} instead of 404 -- opt-in only")
+    void testGetMyRank_notYetRanked_optInAnswersWithRankedFalse() throws Exception {
+        when(rankService.getRankCard(8L)).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/ranks/me").param("allowUnranked", "true").header("userId", 8L)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ranked").value(false))
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    @DisplayName("allowUnranked=false (explicit) is still the 404 existing clients rely on")
+    void testGetMyRank_notYetRanked_explicitFalseStaysA404() throws Exception {
+        when(rankService.getRankCard(8L)).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/ranks/me").param("allowUnranked", "false").header("userId", 8L)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("a ranked caller gets the full card -- percentile still a top fraction -- plus the rank nudge")
+    void testGetMyRank_includesTheRankNudge() throws Exception {
+        var card = new RankCardDto(RankTier.ALPINE, 4, 500.0, 0.3, 12, 40, LocalDateTime.now(),
+                true, 400.0, RankTier.PEAK, 1500.0);
+        when(rankService.getRankCard(7L)).thenReturn(Optional.of(card));
+
+        mockMvc.perform(get("/ranks/me").param("allowUnranked", "true").header("userId", 7L)
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ranked").value(true))
+                .andExpect(jsonPath("$.tier").value("ALPINE"))
+                .andExpect(jsonPath("$.percentile").value(0.3))
+                .andExpect(jsonPath("$.tierCutoffXp").value(400.0))
+                .andExpect(jsonPath("$.nextTier").value("PEAK"))
+                .andExpect(jsonPath("$.xpToNextTier").value(1500.0));
+    }
+
+    @Test
+    @DisplayName("at the top tier there is no next tier: nextTier and xpToNextTier are null, keys present")
+    void testGetMyRank_topTierHasNoNextTier() throws Exception {
+        var card = new RankCardDto(RankTier.SUMMIT, 9, 9000.0, 0.0, 1, 40, LocalDateTime.now(),
+                true, 8000.0, null, null);
+        when(rankService.getRankCard(7L)).thenReturn(Optional.of(card));
+
+        mockMvc.perform(get("/ranks/me").header("userId", 7L).accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nextTier").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.xpToNextTier").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.tierCutoffXp").value(8000.0));
+    }
+
+    @Test
     @DisplayName("GET /ranks/{tier}/leaderboard returns that tier's members")
     void testGetTierLeaderboard() throws Exception {
         var member = new RankTierMemberDto(1, 1L, 900.0, 5, RankTier.SUMMIT);
@@ -77,7 +131,7 @@ public class RankControllerTest {
     @Test
     @DisplayName("GET /ranks/me/leaderboard resolves the caller's own tier first")
     void testGetMyTierLeaderboard() throws Exception {
-        var card = new RankCardDto(RankTier.PEAK, 3, 700.0, 0.1, 2, 20, LocalDateTime.now());
+        var card = new RankCardDto(RankTier.PEAK, 3, 700.0, 0.1, 2, 20, LocalDateTime.now(), true, null, null, null);
         when(rankService.getRankCard(9L)).thenReturn(Optional.of(card));
         when(rankService.getTierLeaderboard(RankTier.PEAK, 0, 20)).thenReturn(List.of());
 
