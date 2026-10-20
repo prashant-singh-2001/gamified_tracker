@@ -24,7 +24,7 @@ flowchart TB
     B -->|"ActivityNotFoundException"| C["404 ProblemDetail (activity-service)"]
     B -->|"NoSuchElementException"| D["404 ProblemDetail (gamification-service)"]
     B -->|"InactiveActivityException"| I["409 'inactive, re-enable it' (activity-service)"]
-    B -->|"MethodArgumentNotValidException<br/>(both services)<br/>InvalidTimeRangeException"| J["400 field violations joined"]
+    B -->|"MethodArgumentNotValidException<br/>(all three services)<br/>InvalidTimeRangeException"| J["400 'errors' field→message map + joined detail"]
     B -->|"HttpMessageNotReadableException"| E["400 'Invalid request body'"]
     B -->|"InvalidCredentialsException"| F["401 'Invalid email or password' (gateway)"]
     B -->|"EmailAlreadyRegisteredException"| K["409 'Email already registered' (gateway)"]
@@ -196,19 +196,48 @@ adding `.dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.FORWARD).pe
 **first** matcher (order matters — it must precede `.anyRequest().authenticated()`). The pass-through
 claim above is a property of that matcher now, not just of routing being a real reverse proxy.
 
+### Validation failures — a field map, not just a sentence
+
+A `@Valid` body that fails Bean Validation raises `MethodArgumentNotValidException`; all three
+services now translate it identically (each service owns its copy of the ~20-line handler — the
+shared `contracts` module is for wire contracts, not per-service error plumbing):
+
+```java
+@ExceptionHandler(MethodArgumentNotValidException.class)
+public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
+    Map<String, String> errors = new TreeMap<>();                       // sorted -> stable output
+    for (FieldError fe : ex.getBindingResult().getFieldErrors()) {
+        errors.merge(fe.getField(), messageOf(fe.getDefaultMessage()), (a, b) -> a + "; " + b);
+    }
+    // class-level constraints have no field: key them by object name rather than drop them
+    ...
+    ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+            String.join("; ", errors.values()));
+    problem.setProperty("errors", errors);                              // RFC 7807 extension member
+    return problem;
+}
+```
+Two decisions worth knowing. **`detail` stays the joined messages** rather than becoming a generic
+"Validation failed": activity-service and gamification-service already returned exactly that, so
+any client reading `detail` would regress. And **`errors` is an extension member, not a new
+shape** — the same mechanism the fuzzy-matching `suggestions` use. A field that violates several
+constraints gets its messages joined with `"; "` under one key.
+
 ## Known edges (honest inventory)
 
 - Only the exceptions above are advised; anything else falls through to Spring's defaults — there's
   no catch-all `@ExceptionHandler(Exception.class)`.
-- Bean Validation is now wired in **both** activity-service and gamification-service (issue #74
-  added the latter's `MethodArgumentNotValidException` handler, shown above) — but still not in
-  api-gateway. `LoginRequest`/`RegisterRequest` carry constraints (`@Email`, `@NotBlank`), and
-  `AuthController.register` **does** have `@Valid` on the body, yet the service has no validation
-  starter (`spring-boot-starter-validation`) on its classpath at all, so those annotations never
-  actually run — a blank `firstName` or malformed email is accepted rather than rejected with a 400.
-  This is unrelated to `RegisterRequest.role`, which no longer exists: issue #74 removed the field
-  entirely rather than fixing its validation, since a client-supplied role was the actual
-  vulnerability (any caller could `POST /auth/register {"role":"ADMIN"}` and self-promote) — see
+- Bean Validation is wired in all three web services, and every `MethodArgumentNotValidException`
+  now answers `400` with the same RFC 7807 shape: a joined human-readable `detail` plus an `errors`
+  member mapping each offending field to its message (see "Validation failures" below). The gateway
+  gets its Hibernate Validator transitively through `spring-cloud-gateway-server-mvc`, not from a
+  starter of its own — an earlier version of this note claimed the auth DTOs' constraints never ran,
+  which is not true. What *was* true: the gateway had no handler, so a failure fell through to
+  Spring's default body, and `RegisterRequest.email` had `@Email` without `@NotBlank`, which lets a
+  missing email through (`@Email` accepts `null`). Unrelated to `RegisterRequest.role`, which no
+  longer exists: issue #74 removed the field entirely rather than fixing its validation, since a
+  client-supplied role was the actual vulnerability (any caller could
+  `POST /auth/register {"role":"ADMIN"}` and self-promote) — see
   [Authentication & Identity Propagation](authentication-and-identity.md).
 - `ConstraintViolationException` (thrown by `@Validated` + `@Positive` on a `@RequestHeader` or
   `@PathVariable` value that's *present but invalid* — as opposed to `@Valid` on a `@RequestBody`,
