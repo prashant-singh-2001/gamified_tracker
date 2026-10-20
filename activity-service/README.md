@@ -46,12 +46,12 @@ Base paths `/activity` and `/activitylog`. No auth at this layer (enforced at th
 ### Activities — `/activity`
 
 #### `GET /activity/`
-List all activities. → `200 OK`, array of `ActivityResponseRecord`.
+List **active** activities. → `200 OK`, array of `ActivityResponseRecord`. `?includeInactive=true` also returns deactivated ones, ordered by id (the gateway restricts that parameter to ADMIN, since this service has no security of its own).
 
-#### `GET /activity/{name}`
-Fetch one activity by name.
+#### `GET /activity/{idOrName}`
+Fetch one activity. A digits-only segment is tried as an **id** first and falls back to the name, so an activity actually named `2048` still resolves; anything else is a name. A single mapping dispatches on the segment, because separate `/{id:\d+}` and `/{name}` mappings are ambiguous to Spring.
 - `200 OK` → `ActivityResponseRecord`
-- `404 Not Found` → `ProblemDetail` (`"Activity not found: {name}"`)
+- `404 Not Found` → `ProblemDetail` (`"Activity not found: {idOrName}"`); an inactive activity is a `404` too (issue #84), unless `?includeInactive=true`
 
 #### `POST /activity/`
 Create an activity.
@@ -66,7 +66,14 @@ Request — `ActivityRequestRecord`:
 | `description` | String | optional |
 | `createdAt` | ISO-8601 | **ignored** — server sets current time |
 
-Response `200 OK` — `ActivityResponseRecord` (`name`, `category`, `xpMultiplier`, `active`, `description`, `createdAt`). The `xpMultiplier` returned is the **effective** value (override, or resolved category base), never a misleading `0.0`.
+A name that already exists is a `409`, not a constraint `500`.
+
+#### `PATCH /activity/{id}` and `DELETE /activity/{id}`
+Admin catalog management (gated at the gateway).
+- `PATCH` takes any of `name`, `category`, `xpMultiplier` (`0` clears the override, negative is `400`), `description`, `active`; at least one is required (`400` otherwise). The row is read unfiltered, so an inactive activity can be re-enabled. `404` for an unknown id, `409` if the new name belongs to another activity.
+- `DELETE` answers `200 {"id", "name", "result"}`: `DEACTIVATED` (soft delete, idempotent) if any log or streak references the activity, `REMOVED` (hard delete, name reusable) if none does. `404` for an unknown id.
+
+Response `200 OK` — `ActivityResponseRecord` (`id`, `name`, `category`, `xpMultiplier`, `active`, `description`, `createdAt`). The `xpMultiplier` returned is the **effective** value (override, or resolved category base), never a misleading `0.0`.
 
 ### Activity Logs — `/activitylog`
 
@@ -104,7 +111,13 @@ Response `200 OK` — `ActivityLogResponse`:
 - `404 Not Found` → `ProblemDetail` if `activityName` doesn't match closely enough to auto-resolve (issue #66) — the body carries ranked `suggestions`, not just the bare message. See [Fuzzy activity-name resolution](#fuzzy-activity-name-resolution-issue-66) below.
 
 #### `GET /activitylog/user/{id}`
-All logs for a user. → `200 OK`, array of `ActivityLogResponse`.
+The caller's logs (`{id}` must equal the `userId` header, else `403`). → `200 OK`, array of `ActivityLogResponse`. With any of `page`, `size`, `sort`, `activityId`, `from`, `to` it answers a paged envelope `{content, page, size, totalElements, totalPages, sort}` instead; the unpaged form is a separate handler that is chosen only when none of those parameters is present, so existing callers are unaffected. Invalid paging or filter values are a `400`.
+
+#### `GET /activitylog/user/{id}/recent?limit=5`
+The caller's most-logged activities (quick picks): `activityId`, `name`, `category`, `timesLogged`, `lastUsedAt`, ordered by times logged, then most recent. Owner-only like the list above.
+
+#### `GET /activitylog/streaks/user/{id}`
+Streaks per activity: `activityId`, `currentStreak`, `longestStreak`, `lastActivityDate` and a computed `active` flag — true when the last activity was today or yesterday in UTC. `currentStreak` is only rewritten when the next log arrives, so after a gap it keeps its old value; `active` is how a client knows it is stale.
 
 > `GET /activitylog/{id}` and `GET /activitylog/user/{id}` always return `bonusApplied: false`, `bonusMultiplier: 1.0`, `leveledUp: false` — `bonusApplied`/`bonusMultiplier` aren't persisted columns, only computed in-memory on the `POST` that created the log; `leveledUp` is `false` everywhere now, including on the `POST` response itself (see above).
 
