@@ -47,7 +47,7 @@ Authorization: Bearer <token>
 
 Tokens are signed HS256 JWTs and carry the user's `role` as a claim. The signing secret and expiry both come from config (`jwt.secret` / `jwt.expiration`, see `.env` / `JWT_SECRET` / `JWT_EXPIRATION`).
 
-`SecurityConfig` configures the OAuth2 Resource Server, validates JWTs via the configured `JwtDecoder`, and uses a `JwtAuthenticationConverter` to derive Spring Security authorities from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level**, e.g. `.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")` — seven such matchers exist today (`POST /api/activity`, `/api/activitylog/review/**`, `POST /api/level`, `POST /api/threshold`, `POST /api/ranks/recompute`, `GET /api/level`, `GET /api/level/activity/**`). An `ADMIN` token succeeds on all seven; any other role receives `403 Forbidden`. **The only way to obtain an `ADMIN` token is via an out-of-band-provisioned account** — `POST /auth/register` always assigns `Role.USER` regardless of what the client sends (see `AdminBootstrap` under Auth below).
+`SecurityConfig` configures the OAuth2 Resource Server, validates JWTs via the configured `JwtDecoder`, and uses a `JwtAuthenticationConverter` to derive Spring Security authorities from the token's `role` claim (`ROLE_USER` / `ROLE_ADMIN`). Admin-only routes are enforced **at the URL level**, e.g. `.requestMatchers(HttpMethod.POST, "/api/activity", "/api/activity/").hasRole("ADMIN")` — ten such matchers exist today (`POST`, `PATCH` and `DELETE` on `/api/activity`, `GET /api/activity?includeInactive`, `/api/activitylog/review/**`, `POST /api/level`, `POST /api/threshold`, `POST /api/ranks/recompute`, `GET /api/level`, `GET /api/level/activity/**`). An `ADMIN` token succeeds on all of them; any other role receives `403 Forbidden`. **The only way to obtain an `ADMIN` token is via an out-of-band-provisioned account** — `POST /auth/register` always assigns `Role.USER` regardless of what the client sends (see `AdminBootstrap` under Auth below).
 
 **Per-resource ownership on reads (#76–80, #88) is a separate, second layer**, enforced downstream in `activity-service`/`gamification-service` against the same trusted `userId` header rather than at the Gateway — see the "owner-only" notes on individual endpoints below.
 
@@ -201,11 +201,56 @@ Create an activity. **Requires `ADMIN` role** — a non-admin token gets `403`.
 | `name` | String | should be unique (enforced at the DB level) |
 | `category` | enum: `STUDY`\|`WORK`\|`GAMING`\|`CHORES`\|`HEALTH`\|`OTHER` | |
 | `xpMultiplier` | double | **optional per-activity override.** `≤ 0` or omitted → the activity's `Category` base multiplier applies (`STUDY`/`WORK` 1.5, `HEALTH` 1.3, `OTHER` 1.0, `CHORES` 0.8, `GAMING` 0.5). A positive value overrides that base. e.g. `1.5` |
-| `active` | boolean | optional, **defaults to `true` if omitted** (issue #84) — there is no `PUT`/`PATCH`/`DELETE` for activities, so an activity created with `active: false` (or, before this fix, one created by simply omitting the field) is invisible to both catalog reads above and can never be recovered through the API |
+| `active` | boolean | optional, **defaults to `true` if omitted** (issue #84) — an activity created with `active: false` is invisible to both catalog reads above until an admin re-enables it with `PATCH` (found via `?includeInactive=true`) |
 | `description` | String | optional |
 | `createdAt` | ISO-8601 datetime string | accepted but **ignored** — the server always sets `createdAt` to the current time |
 
 **Response:** `200 OK`, same shape as `GET /api/activity/{idOrName}` (including the new activity's `id`). Note `xpMultiplier` in the response is the **effective** multiplier (the override, or the resolved category base when none was set) — so an activity created without an explicit multiplier reports its category base rather than `0.0`.
+
+**Errors:** `409` if an activity with that name already exists (`{"status":409,"detail":"An activity named 'Reading' already exists"}`).
+
+#### `GET /api/activity?includeInactive=true` and `GET /api/activity/{idOrName}?includeInactive=true`
+**`ADMIN` only** — the presence of the parameter, with any value, is gated (a non-admin gets `403`), because the
+backend would otherwise bind `on`/`yes`/`1` to `true`. Same response shapes as above, but soft-deleted
+(`active: false`) activities are included, ordered by `id`. It is how an admin finds a deactivated
+activity to re-enable it.
+
+#### `PATCH /api/activity/{id}`
+Partially update an activity, including the `active` toggle. **Requires `ADMIN`.** Every field is optional,
+an absent field is left alone, and at least one must be present.
+
+```json
+{ "name": "Deep Work", "category": "WORK", "xpMultiplier": 1.8, "description": "Focused block", "active": true }
+```
+
+| Field | Notes |
+|---|---|
+| `name` | trimmed; non-blank; max 255; must stay unique |
+| `category` | `STUDY`\|`WORK`\|`GAMING`\|`CHORES`\|`HEALTH`\|`OTHER` |
+| `xpMultiplier` | `>= 0`; **`0` clears the override** so the category base applies again; negative is `400` |
+| `description` | an empty string clears it |
+| `active` | `false` hides the activity from catalog reads and makes new logs against it `409`; `true` brings it back |
+
+**Response:** `200 OK`, the updated activity (same shape as `GET /api/activity/{idOrName}`).
+**Errors:** `400` empty body or invalid field; `404` unknown id (inactive ids are found); `409` the new name belongs to another activity (renaming to the activity's own name is fine).
+
+Renames and category/multiplier changes are not retroactive to **XP already awarded**, but analytics group by the
+activity's *current* name and category, so history re-buckets.
+
+#### `DELETE /api/activity/{id}`
+**Requires `ADMIN`.**
+
+- If any activity log or streak references the activity, it is only **deactivated** (soft delete): history keeps
+  its activity and the name stays reserved. Repeating the call is harmless.
+- If nothing references it, the row is **removed**, and the name can be created again — this is how a mistaken
+  create is undone.
+
+**Response:** `200 OK`
+```json
+{ "id": 7, "name": "Deep Work", "result": "DEACTIVATED" }
+```
+`result` is `DEACTIVATED` or `REMOVED`. `404` for an unknown id. Per-activity level thresholds in
+gamification-service are keyed by this id and are not touched by a hard delete.
 
 ---
 

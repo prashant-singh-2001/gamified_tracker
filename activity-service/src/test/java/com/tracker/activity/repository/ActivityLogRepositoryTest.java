@@ -16,6 +16,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -209,5 +210,15 @@ public class ActivityLogRepositoryTest {
                 1L, day.atStartOfDay(), day.atTime(LocalTime.MAX), BASELINE_STATUSES);
 
         assertEquals(60L, total);
+    }
+
+    @Test
+    void existsByActivityId_isTrueOnlyForAnActivityThatHasLogs() {
+        Activity used = activity("Used", Category.STUDY);
+        Activity unused = activity("Unused", Category.STUDY);
+        log(1L, used, 30, ReviewStatus.CLEARED, LocalDateTime.now());
+
+        assertTrue(activityLogRepository.existsByActivityId(used.getId()));
+        assertFalse(activityLogRepository.existsByActivityId(unused.getId()));
     }
 }

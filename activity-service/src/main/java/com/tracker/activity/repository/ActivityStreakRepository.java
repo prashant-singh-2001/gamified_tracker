@@ -14,4 +14,7 @@ public interface ActivityStreakRepository extends JpaRepository<ActivityStreak, 
 
     List<ActivityStreak> findByUserId(Long userId);
 
+    // DELETE /activity/{id}: a streak row also references the activity (FK), so it counts as "in use".
+    boolean existsByActivityId(Long activityId);
+
 }

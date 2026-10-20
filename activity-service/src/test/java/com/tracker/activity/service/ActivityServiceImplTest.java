@@ -2,10 +2,17 @@ package com.tracker.activity.service;
 
 import com.tracker.activity.dao.Activity;
 import com.tracker.activity.dao.Category;
+import com.tracker.activity.dto.ActivityDeleteResponse;
 import com.tracker.activity.dto.ActivityRequestRecord;
+import com.tracker.activity.dto.ActivityUpdateRequest;
+import com.tracker.activity.exception.ActivityNameTakenException;
+import com.tracker.activity.exception.InvalidActivityUpdateException;
+import org.springframework.dao.DataIntegrityViolationException;
 import com.tracker.activity.dto.ActivityResponseRecord;
 import com.tracker.activity.exception.ActivityNotFoundException;
+import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.repository.ActivityRepository;
+import com.tracker.activity.repository.ActivityStreakRepository;
 import com.tracker.activity.service.impl.ActivityServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,6 +36,12 @@ public class ActivityServiceImplTest {
 
     @Mock
     private ActivityRepository activityRepository;
+
+    @Mock
+    private ActivityLogRepository activityLogRepository;
+
+    @Mock
+    private ActivityStreakRepository activityStreakRepository;
 
     @InjectMocks
     private ActivityServiceImpl activityService;
@@ -220,5 +233,191 @@ public class ActivityServiceImplTest {
 
         assertFalse(resp.getBody().active());
     }
-}
 
+    // ---- item 11: catalog administration ----------------------------------------------------------
+
+    private static ActivityUpdateRequest patch(String name, Category category, Double xp, String description, Boolean active) {
+        return new ActivityUpdateRequest(name, category, xp, description, active);
+    }
+
+    @Test
+    @DisplayName("addActivityEntity: a name that already exists is a 409, not a constraint 500")
+    void testAddDuplicateName() {
+        when(activityRepository.findByName("Reading")).thenReturn(Optional.of(activityWith(1L, "Reading")));
+        var request = new ActivityRequestRecord("Reading", Category.STUDY, 1.5, true, "d", LocalDateTime.now());
+
+        assertThrows(ActivityNameTakenException.class, () -> activityService.addActivityEntity(request));
+        verify(activityRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("addActivityEntity: losing a create race on the unique constraint is also a 409")
+    void testAddRaceOnUniqueConstraint() {
+        when(activityRepository.findByName("Reading"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(activityWith(1L, "Reading")));
+        when(activityRepository.save(any())).thenThrow(new DataIntegrityViolationException("uk"));
+        var request = new ActivityRequestRecord("Reading", Category.STUDY, 1.5, true, "d", LocalDateTime.now());
+
+        assertThrows(ActivityNameTakenException.class, () -> activityService.addActivityEntity(request));
+    }
+
+    @Test
+    @DisplayName("updateActivity: only the supplied fields change")
+    void testPatchChangesOnlySuppliedFields() {
+        Activity a = activityWith(3L, "Run");
+        a.setCategory(Category.HEALTH);
+        a.setDescription("old");
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+        when(activityRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        var body = activityService.updateActivity(3L, patch(null, null, 2.0, null, null)).getBody();
+
+        assertEquals(2.0, body.xpMultiplier());
+        assertEquals("Run", body.name());
+        assertEquals(Category.HEALTH, body.category());
+        assertEquals("old", body.description());
+        assertTrue(body.active());
+    }
+
+    @Test
+    @DisplayName("updateActivity: renames (trimmed), changes category and description, and toggles active")
+    void testPatchAllFields() {
+        Activity a = activityWith(3L, "Run");
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+        when(activityRepository.findByName("Jog")).thenReturn(Optional.empty());
+        when(activityRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        var body = activityService.updateActivity(3L, patch("  Jog ", Category.HEALTH, 1.2, "new", false)).getBody();
+
+        assertEquals("Jog", body.name());
+        assertEquals(Category.HEALTH, body.category());
+        assertEquals("new", body.description());
+        assertFalse(body.active());
+    }
+
+    @Test
+    @DisplayName("updateActivity: xpMultiplier 0 clears the override so the category base applies")
+    void testPatchZeroClearsOverride() {
+        Activity a = activityWith(3L, "Run");
+        a.setCategory(Category.WORK);
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+        when(activityRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        var body = activityService.updateActivity(3L, patch(null, null, 0.0, null, null)).getBody();
+
+        assertEquals(Category.WORK.baseXpMultiplier(), body.xpMultiplier());
+    }
+
+    @Test
+    @DisplayName("updateActivity: can re-enable an INACTIVE activity (reads unfiltered)")
+    void testPatchReEnables() {
+        Activity a = activityWith(3L, "Run");
+        a.setActive(false);
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+        when(activityRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        assertTrue(activityService.updateActivity(3L, patch(null, null, null, null, true)).getBody().active());
+    }
+
+    @Test
+    @DisplayName("updateActivity: renaming to another activity's name is a 409 and saves nothing")
+    void testPatchNameTaken() {
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(activityWith(3L, "Run")));
+        when(activityRepository.findByName("Swim")).thenReturn(Optional.of(activityWith(4L, "Swim")));
+
+        assertThrows(ActivityNameTakenException.class,
+                () -> activityService.updateActivity(3L, patch("Swim", null, null, null, null)));
+        verify(activityRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("updateActivity: 'renaming' to its own current name is not a conflict")
+    void testPatchOwnNameIsFine() {
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(activityWith(3L, "Run")));
+        when(activityRepository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        assertEquals("Run", activityService.updateActivity(3L, patch("Run", null, 1.1, null, null)).getBody().name());
+    }
+
+    @Test
+    @DisplayName("updateActivity: an empty body is a 400, an unknown id a 404")
+    void testPatchEmptyAndMissing() {
+        assertThrows(InvalidActivityUpdateException.class,
+                () -> activityService.updateActivity(3L, patch(null, null, null, null, null)));
+
+        when(activityRepository.findById(9L)).thenReturn(Optional.empty());
+        assertThrows(ActivityNotFoundException.class,
+                () -> activityService.updateActivity(9L, patch(null, null, null, null, true)));
+    }
+
+    @Test
+    @DisplayName("deleteActivity: referenced by logs -> soft delete (DEACTIVATED), row kept")
+    void testDeleteSoftWhenLogsReference() {
+        Activity a = activityWith(3L, "Run");
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+        when(activityLogRepository.existsByActivityId(3L)).thenReturn(true);
+
+        var body = activityService.deleteActivity(3L).getBody();
+
+        assertEquals(ActivityDeleteResponse.Result.DEACTIVATED, body.result());
+        assertFalse(a.isActive());
+        verify(activityRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("deleteActivity: referenced only by a streak is still a soft delete")
+    void testDeleteSoftWhenOnlyStreakReferences() {
+        Activity a = activityWith(3L, "Run");
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+        when(activityStreakRepository.existsByActivityId(3L)).thenReturn(true);
+
+        assertEquals(ActivityDeleteResponse.Result.DEACTIVATED, activityService.deleteActivity(3L).getBody().result());
+        verify(activityRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("deleteActivity: deleting an already-inactive referenced activity is idempotent")
+    void testDeleteSoftIsIdempotent() {
+        Activity a = activityWith(3L, "Run");
+        a.setActive(false);
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+        when(activityLogRepository.existsByActivityId(3L)).thenReturn(true);
+
+        assertEquals(ActivityDeleteResponse.Result.DEACTIVATED, activityService.deleteActivity(3L).getBody().result());
+        verify(activityRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("deleteActivity: unreferenced -> hard delete (REMOVED); unknown id -> 404")
+    void testDeleteHardAndMissing() {
+        Activity a = activityWith(3L, "Typo");
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(a));
+
+        var body = activityService.deleteActivity(3L).getBody();
+
+        assertEquals(ActivityDeleteResponse.Result.REMOVED, body.result());
+        assertEquals("Typo", body.name());
+        verify(activityRepository).delete(a);
+
+        when(activityRepository.findById(9L)).thenReturn(Optional.empty());
+        assertThrows(ActivityNotFoundException.class, () -> activityService.deleteActivity(9L));
+    }
+
+    @Test
+    @DisplayName("includeInactive reads use the UNFILTERED lookups; false falls through to the active-only ones")
+    void testIncludeInactiveReads() {
+        Activity off = activityWith(3L, "Old");
+        off.setActive(false);
+        when(activityRepository.findById(3L)).thenReturn(Optional.of(off));
+        when(activityRepository.findByName("Old")).thenReturn(Optional.of(off));
+        when(activityRepository.findAll(any(org.springframework.data.domain.Sort.class))).thenReturn(List.of(off));
+
+        assertFalse(activityService.getActivityByIdOrName("3", true).getBody().active());
+        assertFalse(activityService.getActivity("Old", true).getBody().active());
+        assertEquals(1, activityService.getAllActivities(true).getBody().size());
+
+        when(activityRepository.findAllByActiveTrue()).thenReturn(List.of());
+        assertEquals(0, activityService.getAllActivities(false).getBody().size());
+    }
+}
