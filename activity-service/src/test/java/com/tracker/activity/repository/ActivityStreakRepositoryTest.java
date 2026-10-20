@@ -48,4 +48,12 @@ public class ActivityStreakRepositoryTest {
 
         assertEquals(2, repository.findByUserId(3L).size());
     }
+
+    @Test
+    void existsByActivityId_isTrueOnlyWhenAStreakReferencesTheActivity() {
+        repository.save(streak(4L, 40L, 1));
+
+        assertTrue(repository.existsByActivityId(40L));
+        assertFalse(repository.existsByActivityId(41L));
+    }
 }
