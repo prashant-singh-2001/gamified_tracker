@@ -137,4 +137,17 @@ class ActivityLogQueryTest {
         assertEquals(Sort.Direction.DESC, pageable.getSort().getOrderFor("id").getDirection());
         assertEquals("xpEarned: DESC,id: DESC", pageable.getSort().toString());
     }
+
+    @Test
+    @DisplayName("quick-picks limit: default 5, bounded 1..20, whole numbers only")
+    void recentLimit() {
+        assertEquals(5, ActivityLogQuery.parseRecentLimit(null));
+        assertEquals(5, ActivityLogQuery.parseRecentLimit(" "));
+        assertEquals(1, ActivityLogQuery.parseRecentLimit("1"));
+        assertEquals(20, ActivityLogQuery.parseRecentLimit("20"));
+        assertEquals("limit must be between 1 and 20 (got 0)", message(() -> ActivityLogQuery.parseRecentLimit("0")));
+        assertEquals("limit must be between 1 and 20 (got 21)", message(() -> ActivityLogQuery.parseRecentLimit("21")));
+        assertEquals("limit must be between 1 and 20 (got -3)", message(() -> ActivityLogQuery.parseRecentLimit("-3")));
+        assertEquals("limit must be a whole number (got 'many')", message(() -> ActivityLogQuery.parseRecentLimit("many")));
+    }
 }

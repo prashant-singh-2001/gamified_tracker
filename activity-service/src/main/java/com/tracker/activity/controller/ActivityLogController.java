@@ -6,6 +6,7 @@ import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.NaturalLogDraftResponse;
 import com.tracker.activity.dto.NaturalLogRequest;
 import com.tracker.activity.dto.PagedResponse;
+import com.tracker.activity.dto.RecentActivityResponse;
 import com.tracker.activity.dto.StreakResponse;
 import com.tracker.activity.service.ActivityLogService;
 import com.tracker.activity.service.NaturalLogService;
@@ -75,6 +76,17 @@ public class ActivityLogController {
             @RequestParam(name = "to", required = false) String to) {
         return activityLogService.getActivityForUserPaged(callerUserId, id,
                 ActivityLogQuery.parse(page, size, sort, activityId, from, to));
+    }
+
+    // Quick picks for the "log an activity" screen: the caller's most-logged ACTIVE activities, most
+    // logged first, each with the last time it was used. ?limit= is 1..20 (default 5); a bad value is
+    // a 400. Owner-only, like every per-user read -- ownership is enforced inside the service.
+    @GetMapping("/user/{id}/recent")
+    public ResponseEntity<List<RecentActivityResponse>> getRecentActivities(
+            @RequestHeader("userId") Long callerUserId,
+            @PathVariable("id") Long id,
+            @RequestParam(name = "limit", required = false) String limit) {
+        return activityLogService.getRecentActivities(callerUserId, id, ActivityLogQuery.parseRecentLimit(limit));
     }
 
     // #80/#88: ownership enforced against the trusted header inside the service.
