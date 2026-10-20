@@ -121,10 +121,11 @@ already holds a JWT (everything else, via [Part III](#part-iii--the-request-pipe
 | # | Step | Source | Can stop here? |
 |---|---|---|---|
 | 1 | `AuthRateLimitFilter` IP-throttles `/auth/**` before anything else runs | `AuthRateLimitFilter.java:32-48` | bucket exhausted → `429` |
-| 2 | `@Valid` on `RegisterRequest` | `AuthController.java:24` | validation failure → `400` |
+| 2 | `@Valid` on `RegisterRequest`; its compact constructor first trims + lower-cases the email (`Emails.normalize`) | `AuthController.java:24` | validation failure → `400` |
+| 2a | **Duplicate-email pre-check** (`existsByEmail` on the normalised email) | `AuthService.register` | email taken → `409` "Email already registered" |
 | 3 | Password BCrypt-encoded | `AuthService.java:45` | |
 | 4 | **Role forced to `Role.USER`, never read from the request** | `AuthService.java:47-50` | `RegisterRequest` has no `role` field at all — see [Authentication & Identity](features/authentication-and-identity.md) for why this matters |
-| 5 | User saved, access + refresh token pair issued | `AuthService.java:51-56` | unique-email constraint violation → `500` (no dedicated handler) |
+| 5 | User saved, access + refresh token pair issued | `AuthService.java:51-56` | two registrations racing past step 2a: the loser hits the unique constraint, `AuthService` re-checks `existsByEmail` and maps it to the same `409` (any *other* integrity failure is rethrown, not mislabelled) |
 
 ### 4. Login
 
