@@ -20,7 +20,9 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -179,7 +181,79 @@ public class ActivityControllerTest {
 
         org.mockito.Mockito.verify(activityService).addActivityEntity(org.mockito.ArgumentMatchers.any(com.tracker.activity.dto.ActivityRequestRecord.class));
     }
+
+    // ---- item 11: catalog administration ----------------------------------------------------------
+
+    @Test
+    void patchReturnsTheUpdatedActivity() throws Exception {
+        when(activityService.updateActivity(org.mockito.ArgumentMatchers.eq(5L), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(ResponseEntity.ok(study(5)));
+
+        mockMvc.perform(patch("/activity/5").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"xpMultiplier\":2.0,\"active\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(5));
+    }
+
+    @Test
+    void patchRejectsInvalidFieldsWithTheViolationMessages() throws Exception {
+        mockMvc.perform(patch("/activity/5").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"   \",\"xpMultiplier\":-1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("name must not be blank")))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("xpMultiplier cannot be negative")));
+    }
+
+    @Test
+    void patchWithUnknownCategoryIsABadRequest() throws Exception {
+        mockMvc.perform(patch("/activity/5").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"category\":\"NOPE\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void patchMapsTheServiceExceptionsToProblemDetails() throws Exception {
+        when(activityService.updateActivity(org.mockito.ArgumentMatchers.eq(5L), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new com.tracker.activity.exception.ActivityNameTakenException("Swim"));
+        mockMvc.perform(patch("/activity/5").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Swim\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("An activity named 'Swim' already exists"));
+
+        when(activityService.updateActivity(org.mockito.ArgumentMatchers.eq(6L), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new com.tracker.activity.exception.InvalidActivityUpdateException("Nothing to update"));
+        mockMvc.perform(patch("/activity/6").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+
+        when(activityService.updateActivity(org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new ActivityNotFoundException("Activity not found: 7"));
+        mockMvc.perform(patch("/activity/7").contentType(MediaType.APPLICATION_JSON).content("{\"active\":true}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void deleteReturnsTheOutcome() throws Exception {
+        when(activityService.deleteActivity(5L)).thenReturn(ResponseEntity.ok(
+                new com.tracker.activity.dto.ActivityDeleteResponse(5L, "Study",
+                        com.tracker.activity.dto.ActivityDeleteResponse.Result.DEACTIVATED)));
+
+        mockMvc.perform(delete("/activity/5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(5))
+                .andExpect(jsonPath("$.result").value("DEACTIVATED"));
+    }
+
+    @Test
+    void includeInactiveSwitchesToTheUnfilteredReads_andItsAbsenceDoesNot() throws Exception {
+        when(activityService.getAllActivities(true)).thenReturn(ResponseEntity.ok(List.of(study(5))));
+        when(activityService.getActivityByIdOrName("5", true)).thenReturn(ResponseEntity.ok(study(5)));
+        when(activityService.getActivity("Study", true)).thenReturn(ResponseEntity.ok(study(5)));
+
+        mockMvc.perform(get("/activity/").param("includeInactive", "true")).andExpect(status().isOk());
+        mockMvc.perform(get("/activity/5").param("includeInactive", "true")).andExpect(status().isOk());
+        mockMvc.perform(get("/activity/Study").param("includeInactive", "true")).andExpect(status().isOk());
+
+        verify(activityService, never()).getAllActivities();
+        verify(activityService, never()).getActivityByIdOrName("5");
+        verify(activityService, never()).getActivity("Study");
+    }
 }
-
-
-

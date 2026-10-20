@@ -274,4 +274,72 @@ class SecurityRulesTest {
                         }))
                 .andExpect(status().isNotFound()); // was 403 with an empty body before the fix
     }
+
+    // ---- activity catalog administration ----------------------------------------------------------
+
+    private void assertForbiddenForUser(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder req) throws Exception {
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+        mockMvc.perform(req.header("Authorization", "Bearer " + token)).andExpect(status().isForbidden());
+    }
+
+    private void assertAuthorizedForAdmin(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder req) throws Exception {
+        String token = jwtUtil.generateToken("admin@example.com", Role.ADMIN, 99L);
+        // Authorization passes; the request then fails to route (no activity-service registered here).
+        try {
+            MvcResult result = mockMvc.perform(req.header("Authorization", "Bearer " + token)).andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorization already let the request through by the time this was thrown
+        }
+    }
+
+    @Test
+    @DisplayName("PATCH and DELETE /api/activity/{id} are ADMIN only")
+    void patchAndDeleteActivity_areAdminOnly() throws Exception {
+        assertForbiddenForUser(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .patch("/api/activity/3").contentType(MediaType.APPLICATION_JSON).content("{\"active\":false}"));
+        assertForbiddenForUser(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/activity/3"));
+        assertAuthorizedForAdmin(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .patch("/api/activity/3").contentType(MediaType.APPLICATION_JSON).content("{\"active\":false}"));
+        assertAuthorizedForAdmin(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/activity/3"));
+    }
+
+    @Test
+    @DisplayName("?includeInactive on a catalog read is ADMIN only, whatever the value spells (on/yes/1 bind to true)")
+    void includeInactive_isAdminOnly_inAnyForm() throws Exception {
+        for (String value : new String[]{"true", "on", "yes", "1", "false", ""}) {
+            assertForbiddenForUser(get("/api/activity").param("includeInactive", value));
+            assertForbiddenForUser(get("/api/activity/").param("includeInactive", value));
+            assertForbiddenForUser(get("/api/activity/3").param("includeInactive", value));
+            assertForbiddenForUser(get("/api/activity/Study").param("includeInactive", value));
+        }
+        assertAuthorizedForAdmin(get("/api/activity").param("includeInactive", "true"));
+    }
+
+    @Test
+    @DisplayName("the catalog reads WITHOUT includeInactive stay open to a plain USER")
+    void catalogReads_withoutIncludeInactive_areOpenToUsers() throws Exception {
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+        for (String path : new String[]{"/api/activity", "/api/activity/3"}) {
+            try {
+                MvcResult result = mockMvc.perform(get(path).header("Authorization", "Bearer " + token)).andReturn();
+                assertNotEquals(403, result.getResponse().getStatus());
+            } catch (ServletException expectedDownstreamRoutingFailure) {
+                // authorized; routing fails in this context
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("includeInactive on an unrelated path is not swept up by the activity rule")
+    void includeInactive_onActivityLogPath_isNotAffected() throws Exception {
+        String token = jwtUtil.generateToken("user@example.com", Role.USER, 1L);
+        try {
+            MvcResult result = mockMvc.perform(get("/api/activitylog/user/1").param("includeInactive", "true")
+                    .header("Authorization", "Bearer " + token)).andReturn();
+            assertNotEquals(403, result.getResponse().getStatus());
+        } catch (ServletException expectedDownstreamRoutingFailure) {
+            // authorized
+        }
+    }
 }
