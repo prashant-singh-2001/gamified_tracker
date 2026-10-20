@@ -95,5 +95,31 @@ public class ActivityRepositoryTest {
 
         assertEquals(2, result.size());
     }
-}
 
+    @Test
+    @org.junit.jupiter.api.DisplayName("findByIdAndActiveTrue returns an active row by id")
+    void testFindByIdAndActiveTrue_returnsActiveRow() {
+        Activity saved = activityRepository.save(activity("Running", true));
+
+        var opt = activityRepository.findByIdAndActiveTrue(saved.getId());
+
+        assertTrue(opt.isPresent());
+        assertEquals("Running", opt.get().getName());
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("findByIdAndActiveTrue excludes an inactive row (#84: a soft-deleted activity "
+            + "is invisible on catalog reads, by id as well as by name)")
+    void testFindByIdAndActiveTrue_excludesInactiveRow() {
+        Activity retired = activityRepository.save(activity("Retired", false));
+
+        assertTrue(activityRepository.findByIdAndActiveTrue(retired.getId()).isEmpty());
+        // ...while the plain findById stays unfiltered, like findByName
+        assertTrue(activityRepository.findById(retired.getId()).isPresent());
+    }
+
+    @Test
+    void testFindByIdAndActiveTrue_unknownIdIsEmpty() {
+        assertTrue(activityRepository.findByIdAndActiveTrue(987654L).isEmpty());
+    }
+}

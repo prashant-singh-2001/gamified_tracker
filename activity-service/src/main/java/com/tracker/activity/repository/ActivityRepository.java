@@ -20,5 +20,9 @@ public interface ActivityRepository extends JpaRepository<Activity, Long> {
     // getAllActivities -- every other consumer above must keep using the unfiltered methods.
     Optional<Activity> findByNameAndActiveTrue(String name);
 
+    // Same catalog-read-only rule, by primary key (GET /activity/{id}). The plain findById stays
+    // unfiltered for the same reason findByName does.
+    Optional<Activity> findByIdAndActiveTrue(Long id);
+
     List<Activity> findAllByActiveTrue();
 }

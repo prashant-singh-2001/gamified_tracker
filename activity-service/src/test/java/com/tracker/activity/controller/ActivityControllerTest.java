@@ -3,6 +3,7 @@ package com.tracker.activity.controller;
 import com.tracker.activity.dao.Category;
 import com.tracker.activity.dto.ActivityRequestRecord;
 import com.tracker.activity.dto.ActivityResponseRecord;
+import com.tracker.activity.exception.ActivityNotFoundException;
 import com.tracker.activity.service.ActivityService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,6 +16,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -33,6 +37,7 @@ public class ActivityControllerTest {
     @Test
     void testGetActivity() throws Exception {
         var response = new ActivityResponseRecord(
+                5L,
                 "Study",
                 Category.STUDY,
                 1.5,
@@ -72,6 +77,7 @@ public class ActivityControllerTest {
     @Test
     void testGetAllActivities() throws Exception {
         var response = new ActivityResponseRecord(
+                5L,
                 "Study",
                 Category.STUDY,
                 1.5,
@@ -84,7 +90,57 @@ public class ActivityControllerTest {
 
         mockMvc.perform(get("/activity/").accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(5))
                 .andExpect(jsonPath("$[0].name").value("Study"));
+    }
+
+    private static ActivityResponseRecord study(long id) {
+        return new ActivityResponseRecord(id, "Study", Category.STUDY, 1.5, true, "desc", LocalDateTime.now());
+    }
+
+    @Test
+    void testGetActivityByNumericIdGoesToTheIdHandler_andReturnsTheId() throws Exception {
+        when(activityService.getActivityByIdOrName("5")).thenReturn(ResponseEntity.ok(study(5)));
+
+        mockMvc.perform(get("/activity/5").accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(5))
+                .andExpect(jsonPath("$.name").value("Study"));
+
+        verify(activityService, never()).getActivity(anyString());
+    }
+
+    @Test
+    void testNameLookupsKeepGoingToTheNameHandler() throws Exception {
+        when(activityService.getActivity("Study")).thenReturn(ResponseEntity.ok(study(5)));
+        when(activityService.getActivity("5K")).thenReturn(ResponseEntity.ok(study(6)));
+
+        mockMvc.perform(get("/activity/Study")).andExpect(status().isOk());
+        // Not digits-only, so it is a name and must not be treated as an id
+        mockMvc.perform(get("/activity/5K")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(6));
+
+        verify(activityService, never()).getActivityByIdOrName(anyString());
+    }
+
+    @Test
+    void testADigitsOnlyNameLikeTheGameStillResolves_viaTheIdOrNameHandler() throws Exception {
+        // "2048" is a legitimate activity NAME. The regex mapping shadows the name route for it,
+        // so it must go through the handler that falls back to the name.
+        when(activityService.getActivityByIdOrName("2048")).thenReturn(ResponseEntity.ok(study(12)));
+
+        mockMvc.perform(get("/activity/2048"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(12));
+    }
+
+    @Test
+    void testGetActivityByIdNotFoundIs404ProblemDetail() throws Exception {
+        when(activityService.getActivityByIdOrName("99"))
+                .thenThrow(new ActivityNotFoundException("Activity not found: 99"));
+
+        mockMvc.perform(get("/activity/99"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Activity not found: 99"));
     }
 
     @Test
@@ -99,6 +155,7 @@ public class ActivityControllerTest {
         );
 
         var response = new ActivityResponseRecord(
+                9L,
                 request.name(),
                 request.category(),
                 request.xpMultiplier(),
@@ -116,7 +173,9 @@ public class ActivityControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.APPLICATION_JSON)
                         .content(json))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                // the new activity's id comes back, so a client can use it straight away
+                .andExpect(jsonPath("$.id").value(9));
 
         org.mockito.Mockito.verify(activityService).addActivityEntity(org.mockito.ArgumentMatchers.any(com.tracker.activity.dto.ActivityRequestRecord.class));
     }
