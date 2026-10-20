@@ -72,6 +72,77 @@ public class ActivityServiceImplTest {
         verify(activityRepository).findByNameAndActiveTrue(name);
     }
 
+    private static Activity activityWith(Long id, String name) {
+        return Activity.builder().id(id).name(name).category(Category.OTHER).xpMultiplier(1.0)
+                .active(true).description("d").createdAt(LocalDateTime.now()).build();
+    }
+
+    @Test
+    @DisplayName("responses carry the activity's id")
+    void testResponsesCarryTheId() {
+        when(activityRepository.findByNameAndActiveTrue("Running")).thenReturn(Optional.of(activityWith(42L, "Running")));
+
+        assertEquals(42L, activityService.getActivity("Running").getBody().id());
+    }
+
+    @Test
+    @DisplayName("getActivityByIdOrName: a digits-only segment is tried as an id first")
+    void testGetByIdFound() {
+        when(activityRepository.findByIdAndActiveTrue(7L)).thenReturn(Optional.of(activityWith(7L, "Study")));
+
+        var resp = activityService.getActivityByIdOrName("7");
+
+        assertEquals(7L, resp.getBody().id());
+        assertEquals("Study", resp.getBody().name());
+        // found by id, so the name lookup must not run
+        verify(activityRepository, never()).findByNameAndActiveTrue(any());
+    }
+
+    @Test
+    @DisplayName("getActivityByIdOrName: an inactive or unknown id is a 404 (#84 -- indistinguishable by design)")
+    void testGetByIdInactiveOrUnknown() {
+        when(activityRepository.findByIdAndActiveTrue(99L)).thenReturn(Optional.empty());
+        when(activityRepository.findByNameAndActiveTrue("99")).thenReturn(Optional.empty());
+
+        var ex = assertThrows(ActivityNotFoundException.class, () -> activityService.getActivityByIdOrName("99"));
+
+        assertEquals("Activity not found: 99", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("getActivityByIdOrName: a digits-only NAME ('2048') still resolves, via the name fallback")
+    void testGetByIdFallsBackToADigitsOnlyName() {
+        when(activityRepository.findByIdAndActiveTrue(2048L)).thenReturn(Optional.empty());
+        when(activityRepository.findByNameAndActiveTrue("2048")).thenReturn(Optional.of(activityWith(3L, "2048")));
+
+        var resp = activityService.getActivityByIdOrName("2048");
+
+        assertEquals("2048", resp.getBody().name());
+        assertEquals(3L, resp.getBody().id());
+    }
+
+    @Test
+    @DisplayName("getActivityByIdOrName: when the digits are one activity's id and another's name, the id wins")
+    void testIdBeatsAName() {
+        when(activityRepository.findByIdAndActiveTrue(5L)).thenReturn(Optional.of(activityWith(5L, "Chess")));
+
+        var resp = activityService.getActivityByIdOrName("5");
+
+        assertEquals("Chess", resp.getBody().name());
+        verify(activityRepository, never()).findByNameAndActiveTrue(any());
+    }
+
+    @Test
+    @DisplayName("getActivityByIdOrName: digits too long for a Long are not an id -- tried as a name, no exception")
+    void testHugeDigitStringIsNotAnIdButMayBeAName() {
+        String huge = "99999999999999999999999";
+        when(activityRepository.findByNameAndActiveTrue(huge)).thenReturn(Optional.empty());
+
+        assertThrows(ActivityNotFoundException.class, () -> activityService.getActivityByIdOrName(huge));
+
+        verify(activityRepository, never()).findByIdAndActiveTrue(any());
+    }
+
     @Test
     @DisplayName("addActivityEntity saves and returns response")
     void testAddActivityEntity() {

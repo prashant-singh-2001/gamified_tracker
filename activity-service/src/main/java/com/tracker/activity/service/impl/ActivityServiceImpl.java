@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class ActivityServiceImpl implements ActivityService {
@@ -32,6 +33,29 @@ public class ActivityServiceImpl implements ActivityService {
                 .orElseThrow(() -> new ActivityNotFoundException("Activity not found: " + name));
 
         return ResponseEntity.ok(mapToResponse(activity));
+    }
+
+    @Override
+    public ResponseEntity<ActivityResponseRecord> getActivityByIdOrName(String digits) {
+        // GET /activity/{id}. A digits-only segment is ambiguous: it is an id, but an activity can
+        // legitimately be NAMED with digits ("2048"), and GET /activity/{name} predates ids. So try
+        // the id first and fall back to the name -- an existing caller asking for "2048" by name
+        // keeps working. If an id and another activity's name are the same digits, the id wins.
+        // Both lookups are the active-only variants, for the same reason as getActivity (#84).
+        var activity = parseId(digits).flatMap(activityRepository::findByIdAndActiveTrue)
+                .or(() -> activityRepository.findByNameAndActiveTrue(digits))
+                .orElseThrow(() -> new ActivityNotFoundException("Activity not found: " + digits));
+
+        return ResponseEntity.ok(mapToResponse(activity));
+    }
+
+    // A digits-only string too long for a Long is simply not an id (it may still be a name).
+    private static Optional<Long> parseId(String digits) {
+        try {
+            return Optional.of(Long.parseLong(digits));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
     }
 
     @Override
@@ -59,6 +83,7 @@ public class ActivityServiceImpl implements ActivityService {
 
     private ActivityResponseRecord mapToResponse(Activity activity) {
         return new ActivityResponseRecord(
+                activity.getId(),
                 activity.getName(),
                 activity.getCategory(),
                 // Report the multiplier that will actually apply (#10): the per-activity override,
