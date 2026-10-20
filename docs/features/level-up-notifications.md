@@ -139,8 +139,8 @@ public ResponseEntity<Void> markRead(@RequestHeader("userId") Long userId, @Path
 public ResponseEntity<Map<String, Integer>> markAllRead(@RequestHeader("userId") Long userId) { ... }
 ```
 
-`unread-count` answers `{"count": n, "Count": n}`: `Count` (capital C) is the original key, a naming
-slip every other field avoids, and is **deprecated** — kept only so existing clients keep working.
+`unread-count` answers `{"count": n}`. The original capital-C `Count` key (a naming
+slip every other field avoids) has been **removed**; clients must read `count`.
 
 `read-all` is one `UPDATE … SET is_read = true WHERE user_id = ? AND is_read = false`
 (`markAllReadForUser`), not a load-and-save loop. The `user_id` predicate is what confines it to the

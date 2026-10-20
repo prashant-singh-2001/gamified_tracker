@@ -568,7 +568,7 @@ Surfaces level-up events (`LevelUpEvent`) as a caller-scoped feed. Full detail i
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/notifications?unreadOnly=false` | authenticated | the caller's own level-up events, newest first. `unreadOnly=true` filters to unread only |
-| `GET` | `/api/notifications/unread-count` | authenticated | `{"count": <long>, "Count": <long>}` — both keys carry the same number. **`Count` (capital C) is deprecated**: it was a naming slip (every other field is camelCase) and stays only so existing clients keep working. Read `count`; `Count` will be removed in a later, announced change |
+| `GET` | `/api/notifications/unread-count` | authenticated | `{"count": <long>}`. The old capital-C `Count` key has been removed |
 | `POST` | `/api/notifications/{id}/read` | authenticated | marks one notification read. `204 No Content`, or `404` if `{id}` doesn't belong to the caller (ownership is enforced — this is not an open read like Level Tracker/Activity Log) |
 | `POST` | `/api/notifications/read-all` | authenticated | marks **every** unread notification of the caller read, in one call. `200 OK` with `{"updated": <int>}` — how many it flipped. **Idempotent**: with nothing unread it answers `{"updated": 0}`. Only ever touches the caller's own rows (the user comes from the trusted header; there is no parameter to name another) |
 

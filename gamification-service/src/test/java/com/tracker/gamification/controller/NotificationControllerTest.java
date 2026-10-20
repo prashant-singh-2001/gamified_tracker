@@ -83,14 +83,14 @@ public class NotificationControllerTest {
                         .header("userId", 1L)
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.Count").value(3));
+                .andExpect(jsonPath("$.count").value(3));
 
         verify(notificationService).unreadCount(1L);
     }
 
     @Test
-    @DisplayName("unread-count returns the lowercase 'count' AND the deprecated capital-C 'Count', with the same value")
-    void unreadCount_hasBothKeys() throws Exception {
+    @DisplayName("unread-count returns only the lowercase count key (the capital-C Count is gone)")
+    void unreadCount_hasOnlyLowercaseCount() throws Exception {
         when(notificationService.unreadCount(1L)).thenReturn(3L);
 
         mockMvc.perform(get("/notifications/unread-count")
@@ -98,8 +98,7 @@ public class NotificationControllerTest {
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.count").value(3))
-                .andExpect(jsonPath("$.Count").value(3))
-                .andExpect(jsonPath("$.length()").value(2));
+                .andExpect(jsonPath("$.length()").value(1));
     }
 
     @Test
