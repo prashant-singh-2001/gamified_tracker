@@ -44,7 +44,7 @@ import static org.mockito.Mockito.when;
 class InsightsServiceImplTest {
 
     private static final WeeklyReportResponse DEFAULT_TOTALS =
-            new WeeklyReportResponse(100.0, 80.0, 25.0, 200L, Category.STUDY, List.of());
+            new WeeklyReportResponse(100.0, 80.0, 25.0, 200L, Category.STUDY, List.of(), null, null, null, null, null);
 
     @Mock
     private ActivityLogRepository activityLogRepository;

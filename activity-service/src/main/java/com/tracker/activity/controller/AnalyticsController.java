@@ -1,5 +1,6 @@
 package com.tracker.activity.controller;
 
+import com.tracker.activity.domain.ReportMode;
 import com.tracker.activity.dto.BestTimeOfDayResponse;
 import com.tracker.activity.dto.CategorySummaryResponse;
 import com.tracker.activity.dto.DailyXpResponse;
@@ -43,10 +44,14 @@ public class AnalyticsController {
         return analyticsService.getXpOverTime(callerUserId, userId, days);
     }
 
+    // ?mode=rolling (the default, and what every client got before modes existed) is the last seven
+    // days ending today; ?mode=calendar is the Monday-to-Sunday week containing today. An unknown
+    // mode is a 400, not a silent fallback to the default.
     @GetMapping("/user/{userId}/weekly-report")
     public ResponseEntity<WeeklyReportResponse> getWeeklyReport(@RequestHeader("userId") Long callerUserId,
-                                                                 @PathVariable Long userId) {
-        return analyticsService.getWeeklyReport(callerUserId, userId);
+                                                                 @PathVariable Long userId,
+                                                                 @RequestParam(name = "mode", required = false) String mode) {
+        return analyticsService.getWeeklyReport(callerUserId, userId, ReportMode.parse(mode));
     }
 
     // Issue #72: "best time of day" -- an aggregate GROUP BY hour_of_day, not a model (see the

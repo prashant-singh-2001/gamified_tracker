@@ -70,7 +70,7 @@ class InsightsControllerTest {
     private static WeeklyInsightsResponse weeklyInsightsResponse(String narrative, NarrativeStatus status) {
         LocalDate weekStart = LocalDate.of(2026, 1, 1);
         LocalDate weekEnd = LocalDate.of(2026, 1, 7);
-        WeeklyReportResponse totals = new WeeklyReportResponse(100.0, 80.0, 25.0, 200L, Category.STUDY, List.of());
+        WeeklyReportResponse totals = new WeeklyReportResponse(100.0, 80.0, 25.0, 200L, Category.STUDY, List.of(), null, null, null, null, null);
         List<CategorySummaryResponse> categories = List.of(new CategorySummaryResponse(Category.STUDY, 100L, 100.0, 2L));
         return new WeeklyInsightsResponse(weekStart, weekEnd, totals, categories, narrative, status);
     }
