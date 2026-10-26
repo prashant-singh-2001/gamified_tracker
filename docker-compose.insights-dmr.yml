@@ -1,6 +1,7 @@
-# Docker Model Runner backend for the AI weekly coaching digest (issue #65) -- an alternative to
-# the Ollama profile in docker-compose.yml, for anyone who already has Docker Desktop's Model
-# Runner and would rather not run a second container.
+# Docker Model Runner backend for the AI features: the weekly coaching digest (issue #65) and natural-language
+# activity logging (issue #70). An alternative to the Ollama profile in docker-compose.yml, for anyone who
+# already has Docker Desktop Model Runner and would rather not run a second container. It switches both
+# features on and pulls ai/granite4.2.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.insights-dmr.yml up -d
 #
@@ -11,16 +12,23 @@
 # a Linux CI runner, which is a second reason this never becomes part of the default stack.
 models:
   digest_model:
-    model: ai/gemma3
+    model: ai/granite4.2
 
 services:
   activity:
     models:
       digest_model:
-        # Compose injects the running model's OpenAI-compatible URL into this env var -- confirm it
-        # includes the /engines/v1 suffix Spring AI expects (spring.ai.openai.base-url); if it
-        # doesn't, set INSIGHTS_OPENAI_BASE_URL explicitly in .env instead of relying on this.
-        endpoint_var: INSIGHTS_OPENAI_BASE_URL
+        # Compose injects the running model's endpoint into this env var, but as http://.../v1/, and Spring AI
+        # appends /v1/chat/completions itself, which then 404s ("backend not found"). So the endpoint goes to a
+        # variable nothing reads, and INSIGHTS_OPENAI_BASE_URL is set explicitly below.
+        endpoint_var: DMR_ENDPOINT
+        # The model name above, injected so it lives in one place.
+        model_var: INSIGHTS_OPENAI_MODEL
     environment:
+      - INSIGHTS_OPENAI_BASE_URL=http://model-runner.docker.internal/engines
       - INSIGHTS_ENABLED=true
       - INSIGHTS_CHAT_PROVIDER=openai
+      - NATURAL_LOG_ENABLED=true
+      # Model Runner loads the model on the first request, which can take 20+ seconds: the default 20s
+      # read timeout would report UNAVAILABLE once. 60s covers a cold start.
+      - INSIGHTS_READ_TIMEOUT=60s

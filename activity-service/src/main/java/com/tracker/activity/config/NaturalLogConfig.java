@@ -16,7 +16,7 @@ import java.time.Clock;
 import java.util.Optional;
 
 @Configuration
-@EnableConfigurationProperties(NaturalLogProperties.class)
+@EnableConfigurationProperties({NaturalLogProperties.class, AiBackendProperties.class})
 public class NaturalLogConfig {
 
     // First feature in this module needing a Clock. A bean (rather than calling
@@ -46,11 +46,13 @@ public class NaturalLogConfig {
     @Bean
     @ConditionalOnProperty(prefix = "natural-log", name = "enabled", havingValue = "true")
     public NaturalLanguageLogParser chatModelNaturalLanguageLogParser(
-            ObjectProvider<ChatModel> chatModel, NaturalLogPromptBuilder promptBuilder, Clock clock) {
+            ObjectProvider<ChatModel> chatModel, NaturalLogPromptBuilder promptBuilder, Clock clock,
+            NaturalLogProperties properties, AiBackendProperties aiBackend) {
         ChatModel model = chatModel.getIfAvailable();
         return model == null
                 ? text -> Optional.empty()
-                : new ChatModelNaturalLanguageLogParser(model, promptBuilder, clock);
+                : new ChatModelNaturalLanguageLogParser(model, promptBuilder, clock,
+                        AiRequestOptions.forModel(model, properties.temperature(), aiBackend.disableThinking()));
     }
 
     // Declared second on purpose. With natural-log.enabled=false (the default, and CI) nothing

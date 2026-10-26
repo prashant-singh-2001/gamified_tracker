@@ -66,8 +66,11 @@ docker compose --profile insights up -d
 docker compose exec ollama ollama pull llama3.2
 # then set INSIGHTS_ENABLED=true and INSIGHTS_CHAT_PROVIDER=ollama in .env and restart activity-service
 
-# — or — Docker Model Runner (Docker Desktop's built-in local inference)
+# — or — Docker Model Runner (Docker Desktop's built-in local inference). Switches on BOTH AI features
+# (the weekly digest and natural-language logging) with ai/granite4.2:
+docker model pull ai/granite4.2
 docker compose -f docker-compose.yml -f docker-compose.insights-dmr.yml up -d
+# the first AI request loads the model (about 20 s); later ones take a few seconds
 ```
 
 ## Ports
