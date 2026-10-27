@@ -2,6 +2,7 @@ package com.tracker.activity.domain;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 
 import java.util.Optional;
 
@@ -18,7 +19,17 @@ public class ChatModelWeeklyDigestNarrator implements WeeklyDigestNarrator {
     private final WeeklyDigestPromptBuilder promptBuilder;
 
     public ChatModelWeeklyDigestNarrator(ChatModel chatModel, WeeklyDigestPromptBuilder promptBuilder) {
-        this.chatClient = ChatClient.create(chatModel);
+        this(chatModel, promptBuilder, null);
+    }
+
+    /** {@code options} are layered over the model defaults for every call (see AiRequestOptions); may be null. */
+    public ChatModelWeeklyDigestNarrator(ChatModel chatModel, WeeklyDigestPromptBuilder promptBuilder,
+                                         ChatOptions options) {
+        ChatClient.Builder builder = ChatClient.builder(chatModel);
+        if (options != null) {
+            builder.defaultOptions(options);
+        }
+        this.chatClient = builder.build();
         this.promptBuilder = promptBuilder;
     }
 

@@ -13,5 +13,8 @@ public record NaturalLogProperties(
         boolean enabled,
         // Cost/injection bound on the raw text a client can send -- the endpoint takes a plain
         // string body with no @Size of its own, so this is the only cap on it.
-        int maxInputChars) {
+        int maxInputChars,
+        // Extraction wants a near-deterministic model, unlike the digest narrative. null keeps the
+        // temperature configured for the backend under spring.ai.*.
+        Double temperature) {
 }

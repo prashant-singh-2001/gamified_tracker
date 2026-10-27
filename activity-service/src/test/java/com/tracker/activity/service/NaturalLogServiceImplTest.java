@@ -67,7 +67,7 @@ class NaturalLogServiceImplTest {
 
         parser = new StubParser();
         logIntentResolver = new LogIntentResolver(FIXED_CLOCK, MAX_DURATION_MINUTES);
-        naturalLogProperties = new NaturalLogProperties(true, 500);
+        naturalLogProperties = new NaturalLogProperties(true, 500, null);
         meterRegistry = new SimpleMeterRegistry();
 
         // Real #66 composition -- not mocked -- so the name-preview tests below prove genuine
@@ -86,7 +86,7 @@ class NaturalLogServiceImplTest {
     @Test
     @DisplayName("flag off, parser returns nothing -> DISABLED, nothing written")
     void parseNaturalLog_flagOff_reportsDisabled() {
-        NaturalLogProperties disabledProperties = new NaturalLogProperties(false, 500);
+        NaturalLogProperties disabledProperties = new NaturalLogProperties(false, 500, null);
         NaturalLogServiceImpl serviceWithFlagOff = new NaturalLogServiceImpl(
                 parser, logIntentResolver, disabledProperties, activityRepository, activityNameResolutionService, meterRegistry);
 

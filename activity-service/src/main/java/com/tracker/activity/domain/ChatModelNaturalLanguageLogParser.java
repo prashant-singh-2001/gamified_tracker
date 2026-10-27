@@ -2,6 +2,7 @@ package com.tracker.activity.domain;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.ChatOptions;
 
 import java.time.Clock;
 import java.time.LocalDate;
@@ -28,7 +29,17 @@ public class ChatModelNaturalLanguageLogParser implements NaturalLanguageLogPars
     private final Clock clock;
 
     public ChatModelNaturalLanguageLogParser(ChatModel chatModel, NaturalLogPromptBuilder promptBuilder, Clock clock) {
-        this.chatClient = ChatClient.create(chatModel);
+        this(chatModel, promptBuilder, clock, null);
+    }
+
+    /** {@code options} are layered over the model defaults for every call (see AiRequestOptions); may be null. */
+    public ChatModelNaturalLanguageLogParser(ChatModel chatModel, NaturalLogPromptBuilder promptBuilder, Clock clock,
+                                             ChatOptions options) {
+        ChatClient.Builder builder = ChatClient.builder(chatModel);
+        if (options != null) {
+            builder.defaultOptions(options);
+        }
+        this.chatClient = builder.build();
         this.promptBuilder = promptBuilder;
         this.clock = clock;
     }

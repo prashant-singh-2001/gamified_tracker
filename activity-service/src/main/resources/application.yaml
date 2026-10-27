@@ -72,15 +72,19 @@ spring:
         options:
           temperature: ${INSIGHTS_TEMPERATURE:0.4}
     openai:
-      # Docker Model Runner: http://localhost:12434/engines/v1 from the host,
-      # http://model-runner.docker.internal/engines/v1 from inside a container.
-      base-url: ${INSIGHTS_OPENAI_BASE_URL:http://localhost:12434/engines/v1}
+      # Docker Model Runner: http://localhost:12434/engines from the host,
+      # http://model-runner.docker.internal/engines from inside a container. Spring AI appends
+      # /v1/chat/completions itself, so the URL must END AT /engines: with /engines/v1 the request goes to
+      # /engines/v1/v1/chat/completions and Model Runner answers "404 backend not found".
+      base-url: ${INSIGHTS_OPENAI_BASE_URL:http://localhost:12434/engines}
       # Required by the starter, ignored by a local server. Real value only if you ever point this
       # at a hosted provider -- which CI must never need.
       api-key: ${INSIGHTS_OPENAI_API_KEY:not-needed}
       chat:
-        model: ${INSIGHTS_OPENAI_MODEL:ai/gemma3}
+        # model belongs UNDER options: spring.ai.openai.chat.model is not a property (unlike Ollama), so a model
+        # set there is silently ignored and Spring AI falls back to its built-in gpt-4o-mini.
         options:
+          model: ${INSIGHTS_OPENAI_MODEL:ai/granite4.2}
           temperature: ${INSIGHTS_TEMPERATURE:0.4}
 
   # activity-service makes no other outbound HTTP call (Feign was removed in #16), so this bounds
@@ -204,3 +208,13 @@ insights:
 natural-log:
   enabled: ${NATURAL_LOG_ENABLED:false}
   max-input-chars: ${NATURAL_LOG_MAX_INPUT_CHARS:500}
+  # Extraction should be near-deterministic, unlike the digest narrative (INSIGHTS_TEMPERATURE, 0.4).
+  temperature: ${NATURAL_LOG_TEMPERATURE:0.1}
+
+# Settings shared by the AI features that concern the model server itself.
+ai-backend:
+  # Reasoning models (e.g. Granite 4.2 on Docker Model Runner) otherwise answer with EMPTY content after
+  # spending the whole token budget thinking, which breaks the JSON parse and the read timeout.
+  # Sent as chat_template_kwargs.enable_thinking=false; models without that switch ignore it. Set false for
+  # a server that rejects unknown request fields.
+  disable-thinking: ${AI_BACKEND_DISABLE_THINKING:true}

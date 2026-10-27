@@ -275,11 +275,11 @@ the actual backend switch, `none`/`ollama`/`openai`), `INSIGHTS_MAX_NOTES` (defa
 `INSIGHTS_MAX_NOTE_CHARS` (default `280`), `INSIGHTS_MAX_NARRATIVE_CHARS` (default `1200`). Ollama
 backend: `OLLAMA_BASE_URL` (default `http://localhost:11434`), `OLLAMA_MODEL` (default `llama3.2`).
 Docker Model Runner / other OpenAI-compatible backend: `INSIGHTS_OPENAI_BASE_URL` (default
-`http://localhost:12434/engines/v1`), `INSIGHTS_OPENAI_API_KEY` (default `not-needed` — required by
-the Spring AI starter, ignored by a local server), `INSIGHTS_OPENAI_MODEL` (default `ai/gemma3`).
+`http://localhost:12434/engines` (it must end at `/engines`: Spring AI appends `/v1/chat/completions`, so `/engines/v1` gives a 404)), `INSIGHTS_OPENAI_API_KEY` (default `not-needed` — required by
+the Spring AI starter, ignored by a local server), `INSIGHTS_OPENAI_MODEL` (default `ai/granite4.2`), `AI_BACKEND_DISABLE_THINKING` (default `true`: sends `enable_thinking=false` so reasoning models return content instead of an empty reply), `INSIGHTS_READ_TIMEOUT` (default `20s`; the Model Runner overlay sets `60s` for the cold-start model load).
 
 Natural-language activity logging (issue #70): `NATURAL_LOG_ENABLED` (default `false` — the
-whole-feature switch), `NATURAL_LOG_MAX_INPUT_CHARS` (default `500`). No separate backend
+whole-feature switch), `NATURAL_LOG_MAX_INPUT_CHARS` (default `500`), `NATURAL_LOG_TEMPERATURE` (default `0.1`, overrides `INSIGHTS_TEMPERATURE` for extraction). No separate backend
 selector/vars — reuses `INSIGHTS_CHAT_PROVIDER`/`OLLAMA_*`/`INSIGHTS_OPENAI_*` above.
 
 ## Inter-service dependencies

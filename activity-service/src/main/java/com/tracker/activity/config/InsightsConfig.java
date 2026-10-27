@@ -14,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
 import java.util.Optional;
 
 @Configuration
-@EnableConfigurationProperties(InsightsProperties.class)
+@EnableConfigurationProperties({InsightsProperties.class, AiBackendProperties.class})
 public class InsightsConfig {
 
     @Bean
@@ -30,11 +30,13 @@ public class InsightsConfig {
     @Bean
     @ConditionalOnProperty(prefix = "insights", name = "enabled", havingValue = "true")
     public WeeklyDigestNarrator chatModelWeeklyDigestNarrator(
-            ObjectProvider<ChatModel> chatModel, WeeklyDigestPromptBuilder promptBuilder) {
+            ObjectProvider<ChatModel> chatModel, WeeklyDigestPromptBuilder promptBuilder,
+            AiBackendProperties aiBackend) {
         ChatModel model = chatModel.getIfAvailable();
         return model == null
                 ? facts -> Optional.empty()
-                : new ChatModelWeeklyDigestNarrator(model, promptBuilder);
+                : new ChatModelWeeklyDigestNarrator(model, promptBuilder,
+                        AiRequestOptions.forModel(model, null, aiBackend.disableThinking()));
     }
 
     // Declared second on purpose. With insights.enabled=false (the default, and CI) nothing
